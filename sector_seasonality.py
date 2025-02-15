@@ -145,7 +145,7 @@ def create_seasonality_chart(seasonal_pattern, pattern_strength, group_name, num
             x=strong_weeks,
             y=strong_values,
             mode='markers',
-            name='Strong Pattern (>70%)',
+            name='Weeks that >75% of stocks moved in the same direction',
             marker=dict(size=12, color='yellow', symbol='star'),
         ))
     
