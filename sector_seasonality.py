@@ -124,7 +124,7 @@ def create_seasonality_chart(seasonal_pattern, pattern_strength, group_name, num
     annotations = []
     
     for week in range(1, 53):
-        if pattern_strength[week] >= 70:  # Weeks where >70% move together
+        if pattern_strength[week] >= 75:  # Weeks where >70% move together
             strong_weeks.append(week)
             strong_values.append(seasonal_pattern.iloc[week-1])
             
@@ -266,7 +266,7 @@ def main():
             st.sidebar.markdown(f"Number of stocks analyzed: {num_symbols}")
             
             # Display strongest seasonal weeks
-            strong_weeks = [week for week in range(1, 53) if pattern_strength[week] >= 70]
+            strong_weeks = [week for week in range(1, 53) if pattern_strength[week] >= 75]
             if strong_weeks:
                 st.sidebar.markdown("### Strongest Seasonal Weeks")
                 for week in strong_weeks:
