@@ -28,7 +28,7 @@ def load_stock_classifications():
 def fetch_market_data(symbol):
     try:
         ticker = yf.Ticker(symbol)
-        hist = ticker.history(period="max", interval='1d')
+        hist = ticker.history(period="max", interval='1d')  # Already using "max"
         if hist.empty:
             return None
         return hist['Close']
@@ -291,11 +291,24 @@ def main():
             )
             symbols = industry_stocks[selected_group]
         
+        # First, get max available years for this group
+        max_available_years = 0
+        for symbol in symbols:
+            try:
+                data = fetch_market_data(symbol)
+                if data is not None:
+                    years_available = (data.index.max() - data.index.min()).days / 365
+                    max_available_years = max(max_available_years, int(years_available))
+            except:
+                continue
+        
+        # Use max_available_years for the slider
         num_years = st.slider(
             'Select number of years to analyze:', 
             min_value=1,
-            max_value=25,
-            value=5
+            max_value=max_available_years,
+            value=min(25, max_available_years),  # Default to 25 years or max available if less
+            help="Choose how many years of historical data to include in the analysis. Some industries may have less history available."
         )
     
     try:
@@ -309,6 +322,7 @@ def main():
             # Display group statistics
             st.sidebar.markdown(f"### Group Statistics")
             st.sidebar.markdown(f"Number of stocks analyzed: {num_symbols}")
+            st.sidebar.markdown(f"Maximum years of history: {max_available_years}")
             
             # Display strongest seasonal weeks
             strong_weeks = [week for week in range(1, 53) if pattern_strength[week] >= 75]
