@@ -42,6 +42,7 @@ def calculate_group_seasonality(symbols, num_years):
     all_patterns = []
     weekly_directions = {week: {'up': 0, 'down': 0} for week in range(1, 53)}
     valid_symbols = 0
+    current_year_patterns = []
     
     with st.spinner(f'Calculating seasonality for {len(symbols)} symbols...'):
         progress_bar = st.progress(0)
@@ -50,6 +51,21 @@ def calculate_group_seasonality(symbols, num_years):
             try:
                 data = fetch_market_data(symbol)
                 if data is not None:
+                    # Get current year's data
+                    current_year = datetime.now().year
+                    current_year_data = data[data.index.year == current_year].copy()
+                    if not current_year_data.empty:
+                        current_year_data.index = pd.MultiIndex.from_arrays([
+                            current_year_data.index.year,
+                            current_year_data.index.isocalendar().week
+                        ], names=['year', 'week'])
+                        current_weekly_avg = current_year_data.groupby(level='week').mean()
+                        current_min = current_weekly_avg.min()
+                        current_max = current_weekly_avg.max()
+                        if current_max > current_min:
+                            current_normalized = ((current_weekly_avg - current_min) / (current_max - current_min)) * 100
+                            current_year_patterns.append(current_normalized)
+
                     # Filter for the last n years
                     end_date = data.index.max()
                     start_date = end_date - pd.DateOffset(years=num_years)
@@ -100,11 +116,17 @@ def calculate_group_seasonality(symbols, num_years):
                 pattern_strength[week] = (max_direction / total) * 100
             else:
                 pattern_strength[week] = 0
+        
+        # Calculate current year average if we have data
+        current_year_pattern = None
+        if current_year_patterns:
+            current_year_df = pd.concat(current_year_patterns)
+            current_year_pattern = current_year_df.groupby(level='week').mean()
                 
-        return mean_pattern, pattern_strength, valid_symbols
-    return None, None, 0
+        return mean_pattern, pattern_strength, valid_symbols, current_year_pattern
+    return None, None, 0, None
 
-def create_seasonality_chart(seasonal_pattern, pattern_strength, group_name, num_years, num_symbols):
+def create_seasonality_chart(seasonal_pattern, pattern_strength, current_year_pattern, group_name, num_years, num_symbols):
     current_week = get_current_week()
     
     fig = go.Figure()
@@ -118,17 +140,37 @@ def create_seasonality_chart(seasonal_pattern, pattern_strength, group_name, num
         line=dict(color='blue', width=2)
     ))
     
+    # Add current year pattern if available
+    if current_year_pattern is not None:
+        fig.add_trace(go.Scatter(
+            x=list(range(1, len(current_year_pattern) + 1)),
+            y=current_year_pattern.values,
+            mode='lines',
+            name=f'{datetime.now().year} Price',
+            line=dict(color='yellow', width=2)
+        ))
+    
     # Add markers for strong seasonal weeks
     strong_weeks = []
     strong_values = []
     annotations = []
     
     for week in range(1, 53):
-        if pattern_strength[week] >= 75:  # Weeks where >70% move together
+        if pattern_strength[week] >= 75:
             strong_weeks.append(week)
             strong_values.append(seasonal_pattern.iloc[week-1])
             
-            direction = "UP" if seasonal_pattern.iloc[week-1] > seasonal_pattern.iloc[week-2] else "DOWN"
+            # Modified direction comparison
+            if week == 1:
+                # For week 1, compare with the last week of the pattern
+                direction = "UP" if seasonal_pattern.iloc[0] > seasonal_pattern.iloc[-1] else "DOWN"
+            elif week == 2:
+                # For week 2, compare with week 1
+                direction = "UP" if seasonal_pattern.iloc[1] > seasonal_pattern.iloc[0] else "DOWN"
+            else:
+                # For all other weeks
+                direction = "UP" if seasonal_pattern.iloc[week-1] > seasonal_pattern.iloc[week-2] else "DOWN"
+            
             annotations.append(dict(
                 x=week,
                 y=seasonal_pattern.iloc[week-1],
@@ -180,6 +222,9 @@ def create_seasonality_chart(seasonal_pattern, pattern_strength, group_name, num
     # Calculate y-axis ranges with padding
     y_min = min(seasonal_pattern.values)
     y_max = max(seasonal_pattern.values)
+    if current_year_pattern is not None:
+        y_min = min(y_min, min(current_year_pattern.values))
+        y_max = max(y_max, max(current_year_pattern.values))
     y_range = y_max - y_min
     y_min = max(0, y_min - (y_range * 0.1))
     y_max = y_max + (y_range * 0.1)
@@ -255,10 +300,10 @@ def main():
     
     try:
         # Calculate seasonality
-        pattern, pattern_strength, num_symbols = calculate_group_seasonality(symbols, num_years)
+        pattern, pattern_strength, num_symbols, current_year_pattern = calculate_group_seasonality(symbols, num_years)
         
         if pattern is not None and num_symbols > 0:
-            fig = create_seasonality_chart(pattern, pattern_strength, selected_group, num_years, num_symbols)
+            fig = create_seasonality_chart(pattern, pattern_strength, current_year_pattern, selected_group, num_years, num_symbols)
             st.plotly_chart(fig, use_container_width=True)
             
             # Display group statistics
@@ -270,7 +315,12 @@ def main():
             if strong_weeks:
                 st.sidebar.markdown("### Strongest Seasonal Weeks")
                 for week in strong_weeks:
-                    direction = "UP" if pattern.iloc[week-1] > pattern.iloc[week-2] else "DOWN"
+                    if week == 1:
+                        direction = "UP" if pattern.iloc[0] > pattern.iloc[-1] else "DOWN"
+                    elif week == 2:
+                        direction = "UP" if pattern.iloc[1] > pattern.iloc[0] else "DOWN"
+                    else:
+                        direction = "UP" if pattern.iloc[week-1] > pattern.iloc[week-2] else "DOWN"
                     st.sidebar.markdown(f"Week {week}: {pattern_strength[week]:.0f}% {direction}")
         else:
             st.error("No valid data available for the selected group and time period.")
