@@ -368,13 +368,13 @@ def main():
             
             # Display strongest pattern following stocks
             if correlation_leaders:
-                st.sidebar.markdown("### Stocks Following Pattern Most Closely")
+                st.sidebar.markdown("### Stocks correlating with industry pattern")
                 num_to_show = min(10, len(correlation_leaders))
                 
                 for i, (symbol, corr) in enumerate(correlation_leaders[:num_to_show], 1):
                     # Convert correlation to percentage for easier reading
                     correlation_pct = corr * 100
-                    st.sidebar.markdown(f"{i}. {symbol}: {correlation_pct:.1f}% pattern match")
+                    st.sidebar.markdown(f"{i}. {symbol}: {correlation_pct:.1f}% pattern correlation")
             
             # Display strongest seasonal weeks
             strong_weeks = [week for week in range(1, 53) if pattern_strength[week] >= 75]
