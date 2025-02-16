@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import yfinance as yf
+import numpy as np
 
 # Set page to wide mode
 st.set_page_config(layout="wide")
@@ -28,7 +29,7 @@ def load_stock_classifications():
 def fetch_market_data(symbol):
     try:
         ticker = yf.Ticker(symbol)
-        hist = ticker.history(period="max", interval='1d')  # Already using "max"
+        hist = ticker.history(period="max", interval='1d')
         if hist.empty:
             return None
         return hist['Close']
@@ -43,12 +44,16 @@ def calculate_group_seasonality(symbols, num_years):
     weekly_directions = {week: {'up': 0, 'down': 0} for week in range(1, 53)}
     valid_symbols = 0
     current_year_patterns = []
+    all_stock_patterns = {}  # Store each stock's pattern
     
-    with st.spinner(f'Calculating seasonality for {len(symbols)} symbols...'):
+    with st.spinner(f'Processing {len(symbols)} stocks...'):
         progress_bar = st.progress(0)
+        progress_text = st.empty()
         
+        total_symbols = len(symbols)
         for i, symbol in enumerate(symbols):
             try:
+                progress_text.text(f"Loading {symbol} ({i+1}/{total_symbols})")
                 data = fetch_market_data(symbol)
                 if data is not None:
                     # Get current year's data
@@ -95,13 +100,19 @@ def calculate_group_seasonality(symbols, num_years):
                         year_max = weekly_avg.max()
                         normalized = ((weekly_avg - year_min) / (year_max - year_min)) * 100
                         all_patterns.append(normalized)
+                        all_stock_patterns[symbol] = normalized  # Store individual pattern
                         valid_symbols += 1
                         
             except Exception as e:
                 continue
                 
-            progress_bar.progress((i + 1) / len(symbols))
-    
+            # Update progress bar and show percentage
+            progress = (i + 1) / total_symbols
+            progress_bar.progress(progress)
+            progress_text.text(f"Processed {i+1}/{total_symbols} stocks ({(progress * 100):.0f}%)")
+            
+        progress_text.text(f"Completed! Processed {valid_symbols} valid stocks out of {total_symbols}")
+
     if valid_symbols > 0:
         # Calculate average pattern
         patterns_df = pd.concat(all_patterns)
@@ -117,14 +128,28 @@ def calculate_group_seasonality(symbols, num_years):
             else:
                 pattern_strength[week] = 0
         
+        # Calculate correlation with the mean pattern for each stock
+        pattern_correlations = {}
+        for symbol, pattern in all_stock_patterns.items():
+            try:
+                # Calculate correlation with mean pattern
+                correlation = pattern.corr(mean_pattern)
+                if not np.isnan(correlation):  # Filter out any NaN correlations
+                    pattern_correlations[symbol] = correlation
+            except:
+                continue
+        
+        # Sort stocks by correlation
+        correlation_leaders = sorted(pattern_correlations.items(), key=lambda x: x[1], reverse=True)
+        
         # Calculate current year average if we have data
         current_year_pattern = None
         if current_year_patterns:
             current_year_df = pd.concat(current_year_patterns)
             current_year_pattern = current_year_df.groupby(level='week').mean()
                 
-        return mean_pattern, pattern_strength, valid_symbols, current_year_pattern
-    return None, None, 0, None
+        return mean_pattern, pattern_strength, valid_symbols, current_year_pattern, correlation_leaders
+    return None, None, 0, None, None
 
 def create_seasonality_chart(seasonal_pattern, pattern_strength, current_year_pattern, group_name, num_years, num_symbols):
     current_week = get_current_week()
@@ -137,7 +162,9 @@ def create_seasonality_chart(seasonal_pattern, pattern_strength, current_year_pa
         y=seasonal_pattern.values,
         mode='lines',
         name='Seasonal Pattern',
-        line=dict(color='blue', width=2)
+        line=dict(color='blue', width=2),
+        hovertemplate=None,
+        showlegend=True
     ))
     
     # Add current year pattern if available
@@ -147,7 +174,9 @@ def create_seasonality_chart(seasonal_pattern, pattern_strength, current_year_pa
             y=current_year_pattern.values,
             mode='lines',
             name=f'{datetime.now().year} Price',
-            line=dict(color='yellow', width=2)
+            line=dict(color='yellow', width=2),
+            hovertemplate=None,
+            showlegend=True
         ))
     
     # Add markers for strong seasonal weeks
@@ -180,7 +209,7 @@ def create_seasonality_chart(seasonal_pattern, pattern_strength, current_year_pa
                 yshift=20,
                 font=dict(size=10)
             ))
-    
+
     # Add markers for strong seasonal weeks
     if strong_weeks:
         fig.add_trace(go.Scatter(
@@ -189,6 +218,8 @@ def create_seasonality_chart(seasonal_pattern, pattern_strength, current_year_pa
             mode='markers',
             name='>75% move together',
             marker=dict(size=12, color='yellow', symbol='star'),
+            hovertemplate=None,
+            showlegend=True
         ))
     
     # Add quarterly backgrounds
@@ -248,18 +279,29 @@ def create_seasonality_chart(seasonal_pattern, pattern_strength, current_year_pa
             gridwidth=1,
             gridcolor='rgba(128, 128, 128, 0.2)',
             tickangle=45,
+            showspikes=True,
+            spikecolor='white',
+            spikethickness=1,
+            spikedash='solid',
+            spikesnap='cursor'
         ),
         yaxis=dict(
             gridwidth=1,
             gridcolor='rgba(128, 128, 128, 0.2)',
-            range=[y_min, y_max]
+            range=[y_min, y_max],
+            showspikes=True,
+            spikecolor='white',
+            spikethickness=1,
+            spikedash='solid'
         ),
         showlegend=True,
         height=800,
         width=None,
         template="plotly_dark",
         margin=dict(l=50, r=50, t=100, b=80),
-        annotations=annotations
+        annotations=annotations,
+        hovermode='x',
+        hoverlabel=dict(namelength=0)
     )
     
     return fig
@@ -307,13 +349,13 @@ def main():
             'Select number of years to analyze:', 
             min_value=1,
             max_value=max_available_years,
-            value=min(25, max_available_years),  # Default to 25 years or max available if less
+            value=min(25, max_available_years),
             help="Choose how many years of historical data to include in the analysis. Some industries may have less history available."
         )
     
     try:
         # Calculate seasonality
-        pattern, pattern_strength, num_symbols, current_year_pattern = calculate_group_seasonality(symbols, num_years)
+        pattern, pattern_strength, num_symbols, current_year_pattern, correlation_leaders = calculate_group_seasonality(symbols, num_years)
         
         if pattern is not None and num_symbols > 0:
             fig = create_seasonality_chart(pattern, pattern_strength, current_year_pattern, selected_group, num_years, num_symbols)
@@ -323,6 +365,16 @@ def main():
             st.sidebar.markdown(f"### Group Statistics")
             st.sidebar.markdown(f"Number of stocks analyzed: {num_symbols}")
             st.sidebar.markdown(f"Maximum years of history: {max_available_years}")
+            
+            # Display strongest pattern following stocks
+            if correlation_leaders:
+                st.sidebar.markdown("### Stocks Following Pattern Most Closely")
+                num_to_show = min(10, len(correlation_leaders))
+                
+                for i, (symbol, corr) in enumerate(correlation_leaders[:num_to_show], 1):
+                    # Convert correlation to percentage for easier reading
+                    correlation_pct = corr * 100
+                    st.sidebar.markdown(f"{i}. {symbol}: {correlation_pct:.1f}% pattern match")
             
             # Display strongest seasonal weeks
             strong_weeks = [week for week in range(1, 53) if pattern_strength[week] >= 75]
@@ -344,4 +396,4 @@ def main():
         st.error("Please try another selection or check your data.")
 
 if __name__ == "__main__":
-    main()
+    main()            
