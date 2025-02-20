@@ -194,24 +194,24 @@ def main():
         st.markdown("### Crypto")
         col1, col2, col3 = st.columns(3)
         with col1:
-            if st.button('BTC-USD'):
+            if st.button('BTC'):
                 handle_symbol_change('BTC-USD')
         with col2:
-            if st.button('ETH-USD'):
+            if st.button('ETH'):
                 handle_symbol_change('ETH-USD')
         with col3:
-            if st.button('DOGE-USD'):
+            if st.button('DOGE'):
                 handle_symbol_change('DOGE-USD')
         col1, col2, col3 = st.columns(3)
         with col1:
-            if st.button('name1'):
-                handle_symbol_change('sym')
+            if st.button('BNB'):
+                handle_symbol_change('BNB-USD')
         with col2:
-            if st.button('name2'):
-                handle_symbol_change('sym')
+            if st.button('SOL'):
+                handle_symbol_change('SOL-USD')
         with col3:
-            if st.button('name3'):
-                handle_symbol_change('sym')
+            if st.button('LTC'):
+                handle_symbol_change('LTC-USD')
         
         # Indices - two rows of 3
         st.markdown("### Indices")
@@ -223,26 +223,26 @@ def main():
             if st.button('Dow Jones'):
                 handle_symbol_change('^DJI')
         with col3:
-            if st.button('name4'):
-                handle_symbol_change('sym')
+            if st.button('RUT'):
+                handle_symbol_change('^RUT')
         col1, col2, col3 = st.columns(3)
         with col1:
-            if st.button('name5'):
-                handle_symbol_change('sym')
+            if st.button('NQ'):
+                handle_symbol_change('^IXIC')
         with col2:
             if st.button('name6'):
                 handle_symbol_change('sym')
         with col3:
-            if st.button('name7'):
-                handle_symbol_change('sym')
+            if st.button('DXY'):
+                handle_symbol_change('DX-Y.NYB')
     
     # Forex & Commodities - three rows of 3
     st.markdown("### Forex & Commodities")
     # First row
     col1, col2, col3 = st.columns(3)
     with col1:
-        if st.button('DXY'):
-            handle_symbol_change('DX-Y.NYB')
+        if st.button('EUR/USD'):
+            handle_symbol_change('EURUSD=X')
     with col2:
         if st.button('Gold'):
             handle_symbol_change('GC=F')
