@@ -36,10 +36,64 @@ def get_current_week():
 def handle_symbol_change(new_symbol):
     st.session_state.symbol = new_symbol
 
+def calculate_directional_consistency(data, num_years):
+    """
+    Calculate the percentage of years where price moves in the same direction for each week,
+    and return both the consistency percentage and predominant direction.
+    """
+    end_date = data.index.max()
+    start_date = end_date - pd.DateOffset(years=num_years)
+    filtered_data = data[data.index >= start_date].copy()
+    
+    # Create weekly returns
+    filtered_data = filtered_data.resample('W').last()
+    weekly_returns = filtered_data.pct_change()
+    
+    # Create a DataFrame with year and week columns
+    weekly_returns.index = pd.MultiIndex.from_arrays([
+        weekly_returns.index.year,
+        weekly_returns.index.isocalendar().week
+    ], names=['year', 'week'])
+    
+    consistency_dict = {}
+    
+    # Calculate directional consistency for each week
+    for week in range(1, 53):
+        week_data = weekly_returns.xs(week, level='week', drop_level=False)
+        if not week_data.empty:
+            positive_moves = (week_data > 0).sum()
+            negative_moves = (week_data < 0).sum()
+            total_moves = len(week_data.dropna())
+            
+            if total_moves > 0:
+                max_consistent = max(positive_moves, negative_moves)
+                consistency = (max_consistent / total_moves) * 100
+                direction = "Bullish" if positive_moves > negative_moves else "Bearish"
+                consistency_dict[week] = {
+                    'consistency': consistency,
+                    'direction': direction,
+                    'positive_count': int(positive_moves),
+                    'negative_count': int(negative_moves),
+                    'total_moves': total_moves
+                }
+            else:
+                consistency_dict[week] = {
+                    'consistency': 0,
+                    'direction': "Unknown",
+                    'positive_count': 0,
+                    'negative_count': 0,
+                    'total_moves': 0
+                }
+                
+    return consistency_dict
+
 def create_seasonality_chart(data, symbol, num_years):
     current_week = get_current_week()
     
-    # Filter for the last n years
+    # Calculate directional consistency
+    directional_consistency = calculate_directional_consistency(data, num_years)
+    
+    # Original seasonality calculation code
     end_date = data.index.max()
     start_date = end_date - pd.DateOffset(years=num_years)
     filtered_data = data[data.index >= start_date]
@@ -66,17 +120,104 @@ def create_seasonality_chart(data, symbol, num_years):
     
     fig = go.Figure()
     
-    # Add the seasonal pattern line with its own y-axis
+    # Create a single connected line with colored segments between points
+    x_values = list(range(1, 53))
+    y_values = seasonal_pattern.values
+    
+    # Create the main line but make it nearly transparent - we'll overlay colored segments
     fig.add_trace(go.Scatter(
-        x=list(range(1, 53)),
-        y=seasonal_pattern.values,
-        mode='lines',
+        x=x_values,
+        y=y_values,
+        mode='markers',
         name='Seasonal Pattern',
-        line=dict(color='blue', width=2),
-        yaxis='y'
+        marker=dict(size=8, color='lightgray'),
+        hoverinfo='skip',
+        showlegend=False
     ))
     
-    # Get current year's data
+    # Create a line segment between each pair of points with color based on consistency
+    for i in range(1, 52):
+        week = i + 1  # Adjust to 1-based week indexing
+        consistency = directional_consistency.get(week, {'consistency': 0})['consistency'] if week in directional_consistency else 0
+        direction = directional_consistency.get(week, {'direction': 'Unknown'})['direction'] if week in directional_consistency else 'Unknown'
+        
+        # Determine color based on consistency
+        if consistency == 100:
+            color = 'red'
+            line_width = 4
+            group = '100% Consistent'
+        elif consistency >= 90:
+            color = 'orange'
+            line_width = 3.5
+            group = '90-99% Consistent'
+        elif consistency >= 80:
+            color = 'yellow'
+            line_width = 3
+            group = '80-89% Consistent'
+        elif consistency >= 70:
+            color = 'green'
+            line_width = 2.5
+            group = '70-79% Consistent'
+        elif consistency >= 60:
+            color = 'lightblue'
+            line_width = 2
+            group = '60-69% Consistent'
+        else:
+            color = 'blue'
+            line_width = 1.5
+            group = '<60% Consistent'
+        
+        hover_text = (
+            f"Week {week}<br>"
+            f"Pattern Value: {y_values[i]:.1f}<br>"
+            f"Direction: {direction}<br>"
+            f"Consistency: {consistency:.1f}%"
+        )
+        
+        # Add detailed info for weeks with consistency data
+        if week in directional_consistency:
+            info = directional_consistency[week]
+            hover_text += (
+                f"<br>Bullish Years: {info['positive_count']}"
+                f"<br>Bearish Years: {info['negative_count']}"
+                f"<br>Total Years: {info['total_moves']}"
+            )
+        
+        # Create a segment
+        fig.add_trace(go.Scatter(
+            x=[i, i+1],
+            y=[y_values[i-1], y_values[i]],
+            mode='lines',
+            line=dict(color=color, width=line_width),
+            hoverinfo='text',
+            hovertext=[hover_text, hover_text],
+            name=group,
+            legendgroup=group,
+            showlegend=False  # Don't show legend for every segment
+        ))
+    
+    # Add legend entries (just once per consistency level)
+    legend_entries = [
+        {'name': '100% Consistent', 'color': 'red', 'width': 4},
+        {'name': '90-99% Consistent', 'color': 'orange', 'width': 3.5},
+        {'name': '80-89% Consistent', 'color': 'yellow', 'width': 3},
+        {'name': '70-79% Consistent', 'color': 'green', 'width': 2.5},
+        {'name': '60-69% Consistent', 'color': 'lightblue', 'width': 2},
+        {'name': '<60% Consistent', 'color': 'blue', 'width': 1.5}
+    ]
+    
+    for entry in legend_entries:
+        fig.add_trace(go.Scatter(
+            x=[None],
+            y=[None],
+            mode='lines',
+            line=dict(color=entry['color'], width=entry['width']),
+            name=entry['name'],
+            legendgroup=entry['name'],
+            showlegend=True
+        ))
+    
+    # Add current year line
     current_year = datetime.now().year
     current_year_data = data[data.index.year == current_year].copy()
     current_year_data.index = pd.MultiIndex.from_arrays([
@@ -84,23 +225,21 @@ def create_seasonality_chart(data, symbol, num_years):
         current_year_data.index.isocalendar().week
     ], names=['year', 'week'])
 
-    # Calculate weekly averages for current year
     current_weekly_avg = current_year_data.groupby(level='week').mean()
+    
+    if not current_weekly_avg.empty:
+        year_min = current_weekly_avg.min()
+        year_max = current_weekly_avg.max()
+        current_normalized = ((current_weekly_avg - year_min) / (year_max - year_min)) * 100
 
-    # Normalize current year data
-    year_min = current_weekly_avg.min()
-    year_max = current_weekly_avg.max()
-    current_normalized = ((current_weekly_avg - year_min) / (year_max - year_min)) * 100
-
-    # Add the current year line with a secondary y-axis
-    fig.add_trace(go.Scatter(
-        x=list(range(1, len(current_normalized) + 1)),
-        y=current_normalized.values,
-        mode='lines',
-        name=f'{current_year} Price',
-        line=dict(color='yellow', width=2),
-        yaxis='y2'
-    ))
+        fig.add_trace(go.Scatter(
+            x=list(range(1, len(current_normalized) + 1)),
+            y=current_normalized.values,
+            mode='lines',
+            name=f'{current_year} Price',
+            line=dict(color='white', width=2),
+            yaxis='y2'
+        ))
     
     # Add quarterly backgrounds
     quarters = [
@@ -135,10 +274,10 @@ def create_seasonality_chart(data, symbol, num_years):
     seasonal_max = max(seasonal_pattern.values)
     seasonal_range = seasonal_max - seasonal_min
     
-    # Add padding for seasonal pattern (40% padding for more spread)
     y_min = max(0, seasonal_min - (seasonal_range * 0.4))
     y_max = seasonal_max + (seasonal_range * 0.4)
     
+    # Update layout
     fig.update_layout(
         title=dict(
             text=f'{symbol} Seasonal Pattern (Last {num_years} Years)',
@@ -165,7 +304,7 @@ def create_seasonality_chart(data, symbol, num_years):
         ),
         xaxis=dict(
             tickmode='array',
-            ticktext=[f'Week {i}' for i in range(1, 53)],
+            ticktext=[f'W{i}' for i in range(1, 53)],  # Shortened to just W1, W2, etc.
             tickvals=list(range(1, 53)),
             showgrid=True,
             gridwidth=1,
@@ -173,13 +312,32 @@ def create_seasonality_chart(data, symbol, num_years):
             tickangle=45,
         ),
         showlegend=True,
+        legend=dict(
+            orientation='h',
+            yanchor="bottom",
+            y=1.02,
+            xanchor="center",
+            x=0.5,
+            font=dict(size=12),
+            # Increase item width for better spacing
+            itemwidth=40,
+            # Add some tracegroup gap to space things out horizontally
+            tracegroupgap=20
+        ),
         height=800,
         width=None,
         template="plotly_dark",
-        margin=dict(l=50, r=50, t=100, b=80)
+        margin=dict(l=50, r=50, t=120, b=80)  # Increased top margin for legend
     )
     
-    return fig, seasonal_pattern
+    # Update sidebar stats
+    sidebar_stats = {
+        '100% Consistent': [w for w, c in directional_consistency.items() if c['consistency'] == 100],
+        '90-99% Consistent': [w for w, c in directional_consistency.items() if 90 <= c['consistency'] < 100],
+        '80-89% Consistent': [w for w, c in directional_consistency.items() if 80 <= c['consistency'] < 90]
+    }
+    
+    return fig, seasonal_pattern, directional_consistency, sidebar_stats
 
 def main():
     with st.sidebar:
@@ -235,65 +393,62 @@ def main():
         with col3:
             if st.button('DXY'):
                 handle_symbol_change('DX-Y.NYB')
-    
-    # Forex & Commodities - three rows of 3
-    st.markdown("### Forex & Commodities")
-    # First row
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        if st.button('EUR/USD'):
-            handle_symbol_change('EURUSD=X')
-    with col2:
-        if st.button('Gold'):
-            handle_symbol_change('GC=F')
-    with col3:
-        if st.button('Oil'):
-            handle_symbol_change('CL=F')
-    # Second row
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        if st.button('Silver'):
-            handle_symbol_change('SI=F')
-    with col2:
-        if st.button('Nat Gas'):
-            handle_symbol_change('NG=F')
-    with col3:
-        if st.button('Copper'):
-            handle_symbol_change('HG=F')
-    # Third row
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        if st.button('Sugar'):
-            handle_symbol_change('SB=F')
-    with col2:
-        if st.button('Coffee'):
-            handle_symbol_change('KC=F')
-    with col3:
-        if st.button('name10'):
-            handle_symbol_change('sym')
+        
+        # Forex & Commodities - three rows of 3
+        st.markdown("### Forex & Commodities")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            if st.button('EUR/USD'):
+                handle_symbol_change('EURUSD=X')
+        with col2:
+            if st.button('Gold'):
+                handle_symbol_change('GC=F')
+        with col3:
+            if st.button('Oil'):
+                handle_symbol_change('CL=F')
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            if st.button('Silver'):
+                handle_symbol_change('SI=F')
+        with col2:
+            if st.button('Nat Gas'):
+                handle_symbol_change('NG=F')
+        with col3:
+            if st.button('Copper'):
+                handle_symbol_change('HG=F')
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            if st.button('Sugar'):
+                handle_symbol_change('SB=F')
+        with col2:
+            if st.button('Coffee'):
+                handle_symbol_change('KC=F')
+        with col3:
+            if st.button('name10'):
+                handle_symbol_change('sym')
 
-    # Stocks (renamed from Tech Stocks) - two rows of 3
-    st.markdown("### Stocks")
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        if st.button('Apple'):
-            handle_symbol_change('AAPL')
-    with col2:
-        if st.button('Google'):
-            handle_symbol_change('GOOG')
-    with col3:
-        if st.button('Microsoft'):
-            handle_symbol_change('MSFT')
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        if st.button('PBPB'):
-            handle_symbol_change('PBPB')
-    with col2:
-        if st.button('GM'):
-            handle_symbol_change('GM')
-    with col3:
-        if st.button('name13'):
-            handle_symbol_change('sym')
+        # Stocks
+        st.markdown("### Stocks")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            if st.button('Apple'):
+                handle_symbol_change('AAPL')
+        with col2:
+            if st.button('Google'):
+                handle_symbol_change('GOOG')
+        with col3:
+            if st.button('Microsoft'):
+                handle_symbol_change('MSFT')
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            if st.button('PBPB'):
+                handle_symbol_change('PBPB')
+        with col2:
+            if st.button('GM'):
+                handle_symbol_change('GM')
+        with col3:
+            if st.button('name13'):
+                handle_symbol_change('sym')
     
     try:
         # Show loading message while fetching data
@@ -306,13 +461,28 @@ def main():
             
             with st.sidebar:
                 num_years = st.slider('Select number of years to analyze:', 
-                                    min_value=1, 
-                                    max_value=max_years, 
-                                    value=min(5, max_years))
+                                   min_value=1, 
+                                   max_value=max_years, 
+                                   value=min(5, max_years))
             
-            fig, seasonal_pattern = create_seasonality_chart(data, st.session_state.symbol, num_years)
+            # Use the new function with sidebar_stats return value
+            fig, seasonal_pattern, directional_consistency, sidebar_stats = create_seasonality_chart(data, st.session_state.symbol, num_years)
+            
+            # Display the chart
             st.plotly_chart(fig, use_container_width=True)
             
+            # Display statistics about consistent weeks in the sidebar
+            with st.sidebar:
+                st.markdown("### Directional Consistency Stats")
+                for consistency_level, weeks in sidebar_stats.items():
+                    if weeks:
+                        st.markdown(f"**{consistency_level}:**")
+                        week_details = []
+                        for w in sorted(weeks):
+                            direction = directional_consistency[w]['direction']
+                            week_details.append(f"Week {w} ({direction})")
+                        week_list = ", ".join(week_details)
+                        st.markdown(f"{week_list}")
                         
         else:
             st.error(f"No data available for {st.session_state.symbol}. Please check the symbol and try again.")
