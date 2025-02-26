@@ -147,7 +147,7 @@ def create_seasonality_chart(data, symbol, num_years):
             line_width = 4
             group = '100% Consistent'
         elif consistency >= 90:
-            color = 'orange'
+            color = 'purple'
             line_width = 3.5
             group = '90-99% Consistent'
         elif consistency >= 80:
@@ -159,11 +159,11 @@ def create_seasonality_chart(data, symbol, num_years):
             line_width = 2.5
             group = '70-79% Consistent'
         elif consistency >= 60:
-            color = 'lightblue'
+            color = 'blue'
             line_width = 2
             group = '60-69% Consistent'
         else:
-            color = 'blue'
+            color = 'white'
             line_width = 1.5
             group = '<60% Consistent'
         
@@ -199,11 +199,11 @@ def create_seasonality_chart(data, symbol, num_years):
     # Add legend entries (just once per consistency level)
     legend_entries = [
         {'name': '100% Consistent', 'color': 'red', 'width': 4},
-        {'name': '90-99% Consistent', 'color': 'orange', 'width': 3.5},
+        {'name': '90-99% Consistent', 'color': 'purple', 'width': 3.5},
         {'name': '80-89% Consistent', 'color': 'yellow', 'width': 3},
         {'name': '70-79% Consistent', 'color': 'green', 'width': 2.5},
-        {'name': '60-69% Consistent', 'color': 'lightblue', 'width': 2},
-        {'name': '<60% Consistent', 'color': 'blue', 'width': 1.5}
+        {'name': '60-69% Consistent', 'color': 'blue', 'width': 2},
+        {'name': '<60% Consistent', 'color': 'white', 'width': 1.5}
     ]
     
     for entry in legend_entries:
