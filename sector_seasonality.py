@@ -148,24 +148,111 @@ def calculate_group_seasonality(symbols, num_years):
             current_year_df = pd.concat(current_year_patterns)
             current_year_pattern = current_year_df.groupby(level='week').mean()
                 
-        return mean_pattern, pattern_strength, valid_symbols, current_year_pattern, correlation_leaders
-    return None, None, 0, None, None
+        return mean_pattern, pattern_strength, valid_symbols, current_year_pattern, correlation_leaders, weekly_directions
+    return None, None, 0, None, None, None
 
-def create_seasonality_chart(seasonal_pattern, pattern_strength, current_year_pattern, group_name, num_years, num_symbols):
+def create_seasonality_chart(seasonal_pattern, pattern_strength, current_year_pattern, group_name, num_years, num_symbols, weekly_directions):
     current_week = get_current_week()
     
     fig = go.Figure()
     
-    # Add the main seasonal pattern line
+    # Create the main seasonal pattern with colored segments based on consistency
+    x_values = list(range(1, len(seasonal_pattern) + 1))
+    y_values = seasonal_pattern.values
+    
+    # Create a nearly invisible line to help Plotly connect the dots (will be overlaid with colored segments)
     fig.add_trace(go.Scatter(
-        x=list(range(1, 53)),
-        y=seasonal_pattern.values,
-        mode='lines',
-        name='Seasonal Pattern',
-        line=dict(color='blue', width=2),
-        hovertemplate=None,
-        showlegend=True
+        x=x_values,
+        y=y_values,
+        mode='markers',
+        marker=dict(size=1, color='lightgray', opacity=0.2),
+        hoverinfo='skip',
+        showlegend=False
     ))
+    
+    # Add colored line segments based on consistency percentages
+    for i in range(len(x_values) - 1):
+        week = i + 1  # Adjust to 1-based week indexing
+        
+        # Get consistency and direction info
+        consistency = pattern_strength.get(week, 0)
+        
+        # Determine the predominant direction
+        if week in weekly_directions:
+            up_count = weekly_directions[week]['up']
+            down_count = weekly_directions[week]['down']
+            direction = "UP" if up_count > down_count else "DOWN"
+            total_count = up_count + down_count
+            if total_count > 0:
+                max_consistent = max(up_count, down_count)
+                consistency_text = f"{(max_consistent / total_count) * 100:.0f}% {direction}"
+            else:
+                consistency_text = "N/A"
+        else:
+            consistency_text = "N/A"
+        
+        # Determine color and line width based on consistency
+        if consistency == 100:
+            color = 'red'
+            line_width = 3
+            group = '100% Consistent'
+        elif consistency >= 90:
+            color = 'purple'  # Purple for 90-99%
+            line_width = 2.5
+            group = '90-99% Consistent'
+        elif consistency >= 80:
+            color = 'yellow'
+            line_width = 2
+            group = '80-89% Consistent'
+        elif consistency >= 70:
+            color = 'green'
+            line_width = 1.8
+            group = '70-79% Consistent'
+        elif consistency >= 60:
+            color = 'lightblue'
+            line_width = 1.5
+            group = '60-69% Consistent'
+        else:
+            color = 'blue'
+            line_width = 1
+            group = '<60% Consistent'
+        
+        # Create hover text
+        hover_text = f"Week {week}<br>Value: {y_values[i]:.1f}<br>{consistency_text}"
+        
+        # Create segment
+        fig.add_trace(go.Scatter(
+            x=[x_values[i], x_values[i+1]],
+            y=[y_values[i], y_values[i+1]],
+            mode='lines',
+            line=dict(color=color, width=line_width),
+            hoverinfo='text',
+            hovertext=[hover_text, hover_text],
+            name=group,
+            legendgroup=group,
+            showlegend=False  # Will add legend entries separately
+        ))
+    
+    # Add legend entries (just once per consistency level)
+    legend_entries = [
+        {'name': '100% Consistent', 'color': 'red', 'width': 3},
+        {'name': '90-99% Consistent', 'color': 'purple', 'width': 2.5},
+        {'name': '80-89% Consistent', 'color': 'yellow', 'width': 2},
+        {'name': '70-79% Consistent', 'color': 'green', 'width': 1.8},
+        {'name': '60-69% Consistent', 'color': 'lightblue', 'width': 1.5},
+        {'name': '<60% Consistent', 'color': 'blue', 'width': 1}
+    ]
+    
+    for entry in legend_entries:
+        fig.add_trace(go.Scatter(
+            x=[None],
+            y=[None],
+            mode='lines',
+            line=dict(color=entry['color'], width=entry['width']),
+            name=entry['name'],
+            legendgroup=entry['name'],
+            showlegend=True
+        ))
     
     # Add current year pattern if available
     if current_year_pattern is not None:
@@ -174,50 +261,7 @@ def create_seasonality_chart(seasonal_pattern, pattern_strength, current_year_pa
             y=current_year_pattern.values,
             mode='lines',
             name=f'{datetime.now().year} Price',
-            line=dict(color='yellow', width=2),
-            hovertemplate=None,
-            showlegend=True
-        ))
-    
-    # Add markers for strong seasonal weeks
-    strong_weeks = []
-    strong_values = []
-    annotations = []
-    
-    for week in range(1, 53):
-        if pattern_strength[week] >= 75:
-            strong_weeks.append(week)
-            strong_values.append(seasonal_pattern.iloc[week-1])
-            
-            # Modified direction comparison
-            if week == 1:
-                # For week 1, compare with the last week of the pattern
-                direction = "UP" if seasonal_pattern.iloc[0] > seasonal_pattern.iloc[-1] else "DOWN"
-            elif week == 2:
-                # For week 2, compare with week 1
-                direction = "UP" if seasonal_pattern.iloc[1] > seasonal_pattern.iloc[0] else "DOWN"
-            else:
-                # For all other weeks
-                direction = "UP" if seasonal_pattern.iloc[week-1] > seasonal_pattern.iloc[week-2] else "DOWN"
-            
-            annotations.append(dict(
-                x=week,
-                y=seasonal_pattern.iloc[week-1],
-                text=f"Week {week}<br>{pattern_strength[week]:.0f}% {direction}",
-                showarrow=True,
-                arrowhead=1,
-                yshift=20,
-                font=dict(size=10)
-            ))
-
-    # Add markers for strong seasonal weeks
-    if strong_weeks:
-        fig.add_trace(go.Scatter(
-            x=strong_weeks,
-            y=strong_values,
-            mode='markers',
-            name='>75% move together',
-            marker=dict(size=12, color='yellow', symbol='star'),
+            line=dict(color='white', width=2),
             hovertemplate=None,
             showlegend=True
         ))
@@ -295,13 +339,24 @@ def create_seasonality_chart(seasonal_pattern, pattern_strength, current_year_pa
             spikedash='solid'
         ),
         showlegend=True,
+        legend=dict(
+            orientation='h',
+            yanchor="bottom",
+            y=1.02,
+            xanchor="center",
+            x=0.5,
+            font=dict(size=12)
+        ),
         height=800,
         width=None,
         template="plotly_dark",
         margin=dict(l=50, r=50, t=100, b=80),
-        annotations=annotations,
         hovermode='x',
-        hoverlabel=dict(namelength=0)
+        hoverlabel=dict(
+            bgcolor="rgba(0,0,0,0.8)",
+            font_size=11,
+            font_family="Arial"
+        )
     )
     
     return fig
@@ -354,11 +409,12 @@ def main():
         )
     
     try:
-        # Calculate seasonality
-        pattern, pattern_strength, num_symbols, current_year_pattern, correlation_leaders = calculate_group_seasonality(symbols, num_years)
+        # Calculate seasonality (with weekly_directions added to return values)
+        pattern, pattern_strength, num_symbols, current_year_pattern, correlation_leaders, weekly_directions = calculate_group_seasonality(symbols, num_years)
         
         if pattern is not None and num_symbols > 0:
-            fig = create_seasonality_chart(pattern, pattern_strength, current_year_pattern, selected_group, num_years, num_symbols)
+            # Updated chart creation function with weekly_directions
+            fig = create_seasonality_chart(pattern, pattern_strength, current_year_pattern, selected_group, num_years, num_symbols, weekly_directions)
             st.plotly_chart(fig, use_container_width=True)
             
             # Display group statistics
@@ -376,18 +432,59 @@ def main():
                     correlation_pct = corr * 100
                     st.sidebar.markdown(f"{i}. {symbol}: {correlation_pct:.1f}% pattern correlation")
             
-            # Display strongest seasonal weeks
-            strong_weeks = [week for week in range(1, 53) if pattern_strength[week] >= 75]
-            if strong_weeks:
-                st.sidebar.markdown("### Strongest Seasonal Weeks")
-                for week in strong_weeks:
-                    if week == 1:
-                        direction = "UP" if pattern.iloc[0] > pattern.iloc[-1] else "DOWN"
-                    elif week == 2:
-                        direction = "UP" if pattern.iloc[1] > pattern.iloc[0] else "DOWN"
-                    else:
-                        direction = "UP" if pattern.iloc[week-1] > pattern.iloc[week-2] else "DOWN"
-                    st.sidebar.markdown(f"Week {week}: {pattern_strength[week]:.0f}% {direction}")
+            # Display strongest seasonal weeks in tabs to organize by consistency level
+            st.sidebar.markdown("### Strongest Seasonal Weeks")
+            tab1, tab2, tab3 = st.sidebar.tabs(["100%", "90-99%", "80-89%"])
+            
+            # Prepare week data by consistency levels
+            weeks_100 = [w for w in range(1, 53) if pattern_strength.get(w, 0) == 100]
+            weeks_90_99 = [w for w in range(1, 53) if 90 <= pattern_strength.get(w, 0) < 100]
+            weeks_80_89 = [w for w in range(1, 53) if 80 <= pattern_strength.get(w, 0) < 90]
+            
+            with tab1:
+                if weeks_100:
+                    week_details = []
+                    for week in sorted(weeks_100):
+                        if week in weekly_directions:
+                            up_count = weekly_directions[week]['up']
+                            down_count = weekly_directions[week]['down']
+                            direction = "UP" if up_count > down_count else "DOWN"
+                            week_details.append(f"Week {week}: 100% {direction}")
+                    
+                    st.markdown("<br>".join(week_details), unsafe_allow_html=True)
+                else:
+                    st.write("No weeks with 100% consistency")
+            
+            with tab2:
+                if weeks_90_99:
+                    week_details = []
+                    for week in sorted(weeks_90_99):
+                        if week in weekly_directions:
+                            up_count = weekly_directions[week]['up']
+                            down_count = weekly_directions[week]['down']
+                            direction = "UP" if up_count > down_count else "DOWN"
+                            consistency = pattern_strength.get(week, 0)
+                            week_details.append(f"Week {week}: {consistency:.1f}% {direction}")
+                    
+                    st.markdown("<br>".join(week_details), unsafe_allow_html=True)
+                else:
+                    st.write("No weeks with 90-99% consistency")
+            
+            with tab3:
+                if weeks_80_89:
+                    week_details = []
+                    for week in sorted(weeks_80_89):
+                        if week in weekly_directions:
+                            up_count = weekly_directions[week]['up']
+                            down_count = weekly_directions[week]['down']
+                            direction = "UP" if up_count > down_count else "DOWN"
+                            consistency = pattern_strength.get(week, 0)
+                            week_details.append(f"Week {week}: {consistency:.1f}% {direction}")
+                    
+                    st.markdown("<br>".join(week_details), unsafe_allow_html=True)
+                else:
+                    st.write("No weeks with 80-89% consistency")
+
         else:
             st.error("No valid data available for the selected group and time period.")
             
@@ -396,4 +493,4 @@ def main():
         st.error("Please try another selection or check your data.")
 
 if __name__ == "__main__":
-    main()            
+    main()
