@@ -128,6 +128,12 @@ def plot_multi_timeframe_patterns(data, symbol, timeframes, show_patterns):
     # Add today's price
     today = pd.Timestamp.now(tz='US/Eastern').date()
     today_data = data[data.index.date == today]
+    
+    # Add yesterday's price
+    yesterday = today - pd.Timedelta(days=1)
+    yesterday_data = data[data.index.date == yesterday]
+    
+    # Display today's price if available
     if not today_data.empty:
         today_open = today_data['Close'].iloc[0]
         today_changes = ((today_data['Close'] - today_open) / today_open) * 100
@@ -139,6 +145,22 @@ def plot_multi_timeframe_patterns(data, symbol, timeframes, show_patterns):
                 mode='lines',
                 name="Today's Price",
                 line=dict(color='white', width=2, dash='dash'),
+            ),
+            row=1, col=1
+        )
+    
+    # Display yesterday's price if available
+    if not yesterday_data.empty:
+        yesterday_open = yesterday_data['Close'].iloc[0]
+        yesterday_changes = ((yesterday_data['Close'] - yesterday_open) / yesterday_open) * 100
+        
+        fig.add_trace(
+            go.Scatter(
+                x=[t.strftime('%H:%M') for t in yesterday_data.index.time],
+                y=yesterday_changes.values,
+                mode='lines',
+                name="Yesterday's Price",
+                line=dict(color='rgba(255, 165, 0, 0.9)', width=2, dash='dot'),
             ),
             row=1, col=1
         )
@@ -176,6 +198,22 @@ def plot_multi_timeframe_patterns(data, symbol, timeframes, show_patterns):
                 ),
                 row=2, col=1
             )
+            
+            # Add yesterday's volume if available
+            if not yesterday_data.empty:
+                yesterday_volume = yesterday_data.groupby(yesterday_data.index.strftime('%H:%M'))['Volume'].mean()
+                norm_yesterday_vol = yesterday_volume / max_vol
+                
+                fig.add_trace(
+                    go.Bar(
+                        x=yesterday_volume.index,
+                        y=norm_yesterday_vol.values,
+                        name="Yesterday's Volume",
+                        marker_color='rgba(255, 165, 0, 0.5)',
+                        showlegend=True
+                    ),
+                    row=2, col=1
+                )
 
     # Update layout
     fig.update_layout(
