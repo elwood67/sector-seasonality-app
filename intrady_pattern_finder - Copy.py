@@ -69,10 +69,11 @@ def calculate_daily_pattern(data, num_days=60):
             day_pattern.index = day_data.index.time
             all_patterns[date] = day_pattern
     
+    # We're removing the average pattern calculation
     # Calculate average pattern
-    avg_pattern = all_patterns.mean(axis=1)
+    # avg_pattern = all_patterns.mean(axis=1)
     
-    return avg_pattern, all_patterns
+    return None, all_patterns  # Return None instead of avg_pattern
 
 def find_top_similar_days(today_data, historical_patterns, num_matches=10, recent_bias=False, min_overlap=5):
     """Find the top N historical days that most closely match today's pattern"""
@@ -188,7 +189,7 @@ def group_similar_patterns(patterns, threshold=0.8):
     
     return grouped_patterns
 
-def plot_pattern_matches(data, symbol, top_matches, composite_pattern, show_scores=True, max_patterns=10):
+def plot_pattern_matches(data, symbol, top_matches, show_scores=True, max_patterns=10):
     """Create plot showing pattern matches with today's data"""
     fig = make_subplots(
         rows=2, cols=1,
@@ -204,7 +205,6 @@ def plot_pattern_matches(data, symbol, top_matches, composite_pattern, show_scor
     # Colors for different patterns (extend for more patterns)
     colors = {
         'today': 'rgb(255, 255, 255)',    # White
-        'yesterday': 'rgb(255, 165, 0)',  # Orange
         'match1': 'rgb(255, 99, 132)',    # Red
         'match2': 'rgb(66, 135, 245)',    # Blue
         'match3': 'rgb(52, 191, 73)',     # Green
@@ -215,7 +215,6 @@ def plot_pattern_matches(data, symbol, top_matches, composite_pattern, show_scor
         'match8': 'rgb(102, 255, 102)',   # Light Green
         'match9': 'rgb(255, 204, 0)',     # Gold
         'match10': 'rgb(204, 102, 255)',  # Lavender
-        'composite': 'rgb(96, 96, 255)'   # Blue-Purple
     }
     
     # Add today's price
@@ -234,28 +233,11 @@ def plot_pattern_matches(data, symbol, top_matches, composite_pattern, show_scor
             row=1, col=1
         )
     
-    # Add yesterday's price
-    yesterday = today - pd.Timedelta(days=1)
-    yesterday_data = data[data.index.date == yesterday]
-    
-    if not yesterday_data.empty:
-        yesterday_open = yesterday_data['Close'].iloc[0]
-        yesterday_changes = ((yesterday_data['Close'] - yesterday_open) / yesterday_open) * 100
-        
-        fig.add_trace(
-            go.Scatter(
-                x=[t.strftime('%H:%M') for t in yesterday_data.index.time],
-                y=yesterday_changes.values,
-                mode='lines',
-                name="Yesterday's Price",
-                line=dict(color=colors['yesterday'], width=2, dash='dot'),
-            ),
-            row=1, col=1
-        )
+    # Removed yesterday's price trace
     
     # Add top matching patterns (limit to max_patterns)
     for i, match in enumerate(top_matches[:max_patterns]):
-        if i < len(colors) - 2:  # Ensure we have a color for this match
+        if i < len(colors) - 1:  # Ensure we have a color for this match
             match_color = colors[f'match{i+1}']
             date_str = pd.Timestamp(match['date']).strftime('%Y-%m-%d')
             
@@ -280,19 +262,7 @@ def plot_pattern_matches(data, symbol, top_matches, composite_pattern, show_scor
                 row=1, col=1
             )
     
-    # Add composite pattern if available
-    if composite_pattern is not None:
-        fig.add_trace(
-            go.Scatter(
-                x=[t.strftime('%H:%M') for t in composite_pattern.index],
-                y=composite_pattern.values,
-                mode='lines',
-                name='60-Day Average Pattern',
-                line=dict(color=colors['composite'], width=2, dash='dash'),
-                opacity=0.8
-            ),
-            row=1, col=1
-        )
+    # Removed composite pattern trace
     
     # Process volume data
     if 'Volume' in data.columns:
@@ -306,24 +276,15 @@ def plot_pattern_matches(data, symbol, top_matches, composite_pattern, show_scor
             today_data['time_bucket'] = today_data.index.strftime('%H:%M')
             today_volume = today_data.groupby('time_bucket')['Volume'].mean()
             
-            # Yesterday's volume data
-            yesterday_volume = None
-            if not yesterday_data.empty:
-                yesterday_data['time_bucket'] = yesterday_data.index.strftime('%H:%M')
-                yesterday_volume = yesterday_data.groupby('time_bucket')['Volume'].mean()
+            # Removed yesterday's volume data section
             
             # Find max volume for normalization
-            max_vol_values = [historical_volume.max(), today_volume.max()]
-            if yesterday_volume is not None:
-                max_vol_values.append(yesterday_volume.max())
-                
-            max_vol = max(max_vol_values)
+            max_vol = max(historical_volume.max(), today_volume.max())
             
             # Create legend groups
             legend_groups = {
                 'historical': False,
-                'today': False,
-                'yesterday': False
+                'today': False
             }
             
             # Plot historical volume
@@ -358,22 +319,7 @@ def plot_pattern_matches(data, symbol, top_matches, composite_pattern, show_scor
                 )
                 legend_groups['today'] = True
             
-            # Add yesterday's volume if available
-            if yesterday_volume is not None:
-                norm_yesterday_vol = yesterday_volume / max_vol
-                for time_bucket, volume in norm_yesterday_vol.items():
-                    fig.add_trace(
-                        go.Bar(
-                            x=[time_bucket],
-                            y=[volume],
-                            name="Yesterday's Volume",
-                            marker_color='rgba(255, 165, 0, 0.5)',
-                            showlegend=legend_groups['yesterday'] is False,
-                            legendgroup='yesterday'
-                        ),
-                        row=2, col=1
-                    )
-                    legend_groups['yesterday'] = True
+            # Removed yesterday's volume plotting
 
     # Update layout
     fig.update_layout(
@@ -598,7 +544,7 @@ display_matches = st.sidebar.slider(
 
 # Display options
 st.sidebar.subheader("Display Options")
-show_composite = st.sidebar.checkbox("Show 60-Day Average Pattern", value=True)
+# Removed the show_composite checkbox
 recent_bias = st.sidebar.checkbox("Bias Toward Recent Patterns", value=False)
 show_scores = st.sidebar.checkbox("Show Similarity Scores", value=True)
 
@@ -647,12 +593,11 @@ try:
             top_matches = all_top_matches[:all_matches]
         
         if top_matches:
-            # Display the chart
+            # Display the chart - removed the composite pattern parameter
             fig = plot_pattern_matches(
                 data, 
                 symbol, 
-                top_matches, 
-                avg_pattern if show_composite else None,
+                top_matches,
                 show_scores=show_scores,
                 max_patterns=display_matches
             )

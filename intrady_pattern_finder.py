@@ -66,8 +66,15 @@ def calculate_daily_pattern(data, num_days=60):
             day_pattern = ((day_data['Close'] - day_open) / day_open) * 100
             
             # Store pattern using time as index
-            day_pattern.index = day_data.index.time
-            all_patterns[date] = day_pattern
+            try:
+                # Only convert to time if timestamps are available
+                if all(isinstance(idx, pd.Timestamp) for idx in day_data.index):
+                    day_pattern.index = day_data.index.time
+                # Otherwise keep the original index
+                all_patterns[date] = day_pattern
+            except Exception as e:
+                # If time extraction fails, skip this day
+                continue
     
     # We're removing the average pattern calculation
     # Calculate average pattern
@@ -83,7 +90,15 @@ def find_top_similar_days(today_data, historical_patterns, num_matches=10, recen
     # Calculate today's pattern
     today_open = today_data['Close'].iloc[0]
     today_pattern = ((today_data['Close'] - today_open) / today_open) * 100
-    today_pattern.index = today_data.index.time
+    
+    try:
+        # Make sure index consists of timestamps before extracting time
+        if all(isinstance(idx, pd.Timestamp) for idx in today_data.index):
+            today_pattern.index = today_data.index.time
+        # If not timestamps, keep original index
+    except Exception as e:
+        # If we can't extract time, return empty list - this pattern can't be matched
+        return []
     
     # Store similarity scores for all days
     similarity_scores = []
@@ -217,14 +232,26 @@ def plot_pattern_matches(data, symbol, top_matches, show_scores=True, max_patter
         'match10': 'rgb(204, 102, 255)',  # Lavender
     }
     
-    # Add today's price
+            # Add today's price
     if not today_data.empty:
         today_open = today_data['Close'].iloc[0]
         today_changes = ((today_data['Close'] - today_open) / today_open) * 100
         
+        # Safely extract time strings
+        time_strings = []
+        for idx in today_data.index:
+            try:
+                if isinstance(idx, pd.Timestamp):
+                    time_strings.append(idx.strftime('%H:%M'))
+                else:
+                    # If not a timestamp, convert to string in some reasonable way
+                    time_strings.append(str(idx))
+            except:
+                time_strings.append('00:00')  # Fallback time
+        
         fig.add_trace(
             go.Scatter(
-                x=[t.strftime('%H:%M') for t in today_data.index.time],
+                x=time_strings,
                 y=today_changes.values,
                 mode='lines',
                 name="Today's Price",
@@ -251,9 +278,21 @@ def plot_pattern_matches(data, symbol, top_matches, show_scores=True, max_patter
             if 'count' in match and match['count'] > 1:
                 name += f" (+{match['count']-1} similar)"
             
+            # Safely extract time strings for pattern data
+            pattern_times = []
+            for t in match['pattern'].index:
+                try:
+                    if hasattr(t, 'strftime'):
+                        pattern_times.append(t.strftime('%H:%M'))
+                    else:
+                        # If not a time object, convert to string
+                        pattern_times.append(str(t))
+                except:
+                    pattern_times.append('00:00')  # Fallback
+            
             fig.add_trace(
                 go.Scatter(
-                    x=[t.strftime('%H:%M') for t in match['pattern'].index],
+                    x=pattern_times,
                     y=match['pattern'].values,
                     mode='lines',
                     name=name,
@@ -453,14 +492,28 @@ def create_match_details_card(match, data):
                 max_diff = 0
                 max_diff_time = None
                 
-                for time in set(match['pattern'].index).intersection(set(today_pattern.index)):
-                    diff = abs(today_pattern[time] - match['pattern'][time])
-                    if diff > max_diff:
-                        max_diff = diff
-                        max_diff_time = time
-                
-                if max_diff_time:
-                    st.markdown(f"**Max Divergence**: {max_diff:.2f}% at {max_diff_time}")
+                try:
+                    # Ensure we're working with compatible index types
+                    pattern_times = set(match['pattern'].index)
+                    today_times = set(today_pattern.index)
+                    
+                    common_times = pattern_times.intersection(today_times)
+                    
+                    for time in common_times:
+                        diff = abs(today_pattern[time] - match['pattern'][time])
+                        if diff > max_diff:
+                            max_diff = diff
+                            max_diff_time = time
+                    
+                    if max_diff_time:
+                        # Format the time string appropriately
+                        if hasattr(max_diff_time, 'strftime'):
+                            time_str = max_diff_time.strftime('%H:%M')
+                        else:
+                            time_str = str(max_diff_time)
+                        st.markdown(f"**Max Divergence**: {max_diff:.2f}% at {time_str}")
+                except Exception as e:
+                    st.info("Could not calculate maximum divergence")
 
 def analyze_pattern_distribution(top_matches):
     """Analyze the distribution of patterns - up vs down trends"""
@@ -665,12 +718,17 @@ try:
                 # Display forecast horizon
                 hours_left = 0
                 if not today_data.empty:
-                    last_time = today_data.index[-1].time()
-                    end_of_day = pd.Timestamp.combine(today, datetime.time(23, 59))
-                    hours_left = (end_of_day - today_data.index[-1]).total_seconds() / 3600
-                    
-                if hours_left > 1:
-                    st.info(f"Approximately {hours_left:.1f} hours remaining in today's trading day.")
+                    try:
+                        # Make sure we're working with a datetime object
+                        if isinstance(today_data.index[-1], pd.Timestamp):
+                            last_time = today_data.index[-1]
+                            end_of_day = pd.Timestamp.combine(today, datetime.time(23, 59))
+                            hours_left = (end_of_day - last_time).total_seconds() / 3600
+                            
+                            if hours_left > 1:
+                                st.info(f"Approximately {hours_left:.1f} hours remaining in today's trading day.")
+                    except Exception as e:
+                        st.error(f"Could not calculate remaining time: {str(e)}")
         else:
             st.warning("Not enough data to find pattern matches. Try a different interval or check back later in the day.")
             
