@@ -40,6 +40,36 @@ def fetch_crypto_data(symbol, period="60d", interval="5m"):
     
     return hist
 
+def check_data_availability(symbol, interval="5m"):
+    """
+    Check what data interval and period combinations are available for the symbol
+    Returns the maximum number of days available for the selected interval
+    """
+    try:
+        # Test different periods to determine availability
+        periods = ["7d", "30d", "60d", "90d"]
+        max_days = 0
+        
+        for period in periods:
+            try:
+                ticker = yf.Ticker(symbol)
+                data = ticker.history(period=period, interval=interval)
+                
+                if not data.empty:
+                    start_date = data.index.min()
+                    end_date = data.index.max()
+                    duration = (end_date - start_date).days
+                    
+                    if duration > max_days:
+                        max_days = duration
+            except Exception:
+                pass
+        
+        return max_days
+    except Exception as e:
+        st.error(f"Error checking data availability: {str(e)}")
+        return 30  # Default to 30 days as a safe value
+
 def get_session_date(timestamp, session_open_hour_utc):
     """
     Get the session date for a given timestamp based on configurable session open hour.
@@ -100,6 +130,12 @@ def get_session_data(data, session_date, session_open_hour_utc):
     session_data = data[(data.index >= session_start) & (data.index < session_end)]
     
     return session_data
+
+def minutes_to_time_str(minutes):
+    """Convert minutes from session start to formatted time string"""
+    hours = int(minutes // 60)
+    mins = int(minutes % 60)
+    return f"{hours:02d}:{mins:02d}"
 
 # Pattern analysis functions ----------------------------------------------------------------------------------
 def calculate_session_patterns(sessions, current_session_date=None):
@@ -271,12 +307,6 @@ def group_similar_patterns(patterns, threshold=0.8):
     
     return grouped_patterns
 
-def minutes_to_time_str(minutes):
-    """Convert minutes from session start to formatted time string"""
-    hours = int(minutes // 60)
-    mins = int(minutes % 60)
-    return f"{hours:02d}:{mins:02d}"
-
 def predict_direction(similar_patterns):
     """Predict direction and confidence based on similar patterns"""
     if not similar_patterns:
@@ -305,7 +335,81 @@ def predict_direction(similar_patterns):
     
     return direction, confidence, avg_magnitude
 
-# Visualization and prediction functions ----------------------------------------------------------------------------------
+def calculate_confidence_metrics(top_matches):
+    """Calculate confidence metrics based on pattern agreement"""
+    if not top_matches:
+        return None
+    
+    # Count up vs down patterns
+    up_count = sum(1 for m in top_matches if m['end_value'] > 0)
+    down_count = sum(1 for m in top_matches if m['end_value'] <= 0)
+    total_count = up_count + down_count
+    
+    # Calculate average ending values by trend
+    up_values = [m['end_value'] for m in top_matches if m['end_value'] > 0]
+    down_values = [m['end_value'] for m in top_matches if m['end_value'] <= 0]
+    all_values = up_values + down_values
+    
+    avg_up = sum(up_values) / len(up_values) if up_values else 0
+    avg_down = sum(down_values) / len(down_values) if down_values else 0
+    avg_all = sum(all_values) / len(all_values) if all_values else 0
+    
+    # Calculate weighted average by similarity (inverse of MSE)
+    weights = [1/m['similarity'] for m in top_matches]
+    weighted_values = [m['end_value'] * (1/m['similarity']) for m in top_matches]
+    weighted_avg = sum(weighted_values) / sum(weights) if weights else 0
+    
+    # Calculate confidence based on agreement
+    if total_count > 0:
+        if up_count > down_count:
+            confidence = up_count / total_count
+            direction = "up"
+        elif down_count > up_count:
+            confidence = down_count / total_count
+            direction = "down"
+        else:
+            confidence = 0.5
+            direction = "up" if avg_all > 0 else "down"
+    else:
+        confidence = 0
+        direction = "neutral"
+    
+    # Calculate expected magnitude
+    expected_magnitude = abs(avg_all)
+    
+    # Determine confidence level
+    if confidence >= 0.8:
+        confidence_level = "High"
+    elif confidence >= 0.6:
+        confidence_level = "Medium"
+    else:
+        confidence_level = "Low"
+    
+    # Determine magnitude level
+    if expected_magnitude >= 2.0:
+        magnitude_level = "Large"
+    elif expected_magnitude >= 1.0:
+        magnitude_level = "Medium"
+    else:
+        magnitude_level = "Small"
+    
+    # Return metrics
+    return {
+        'direction': direction,
+        'confidence': confidence,
+        'confidence_level': confidence_level,
+        'expected_magnitude': expected_magnitude,
+        'magnitude_level': magnitude_level,
+        'avg_all': avg_all,
+        'avg_up': avg_up,
+        'avg_down': avg_down,
+        'weighted_avg': weighted_avg,
+        'up_count': up_count,
+        'down_count': down_count,
+        'total_count': total_count
+    }
+
+ # Visualization functions ----------------------------------------------------------------------------------
 def plot_pattern_matches(sessions, symbol, current_session_date, top_matches, show_scores=True, max_patterns=10, session_open_hour_utc=0):
     """Create plot showing pattern matches with current session data"""
     # Create a single plot without volume subplot
@@ -579,81 +683,177 @@ def analyze_pattern_distribution(top_matches):
     
     return fig
 
-def calculate_confidence_metrics(top_matches):
-    """Calculate confidence metrics based on pattern agreement"""
-    if not top_matches:
+# Backtesting functions ----------------------------------------------------------------------------------
+def calculate_actual_result(data, session_date, session_open_hour_utc, cutoff_hours=12):
+    """
+    Calculate actual result from cutoff time to end of session
+    """
+    # Get data for this session
+    session_data = get_session_data(data, session_date, session_open_hour_utc)
+    
+    if session_data.empty:
+        return None, 0
+    
+    # Calculate cutoff time (X hours after session open)
+    session_start = datetime.combine(session_date - timedelta(days=1), time(hour=session_open_hour_utc))
+    session_start = pytz.utc.localize(session_start)
+    
+    cutoff_time = session_start + timedelta(hours=cutoff_hours)
+    
+    # Split data at cutoff
+    before_cutoff = session_data[session_data.index <= cutoff_time]
+    after_cutoff = session_data[session_data.index > cutoff_time]
+    
+    if before_cutoff.empty or after_cutoff.empty:
+        return None, 0
+    
+    # Price at cutoff
+    cutoff_price = before_cutoff['Close'].iloc[-1]
+    
+    # End of session price
+    end_price = after_cutoff['Close'].iloc[-1]
+    
+    # Calculate change
+    change_pct = ((end_price - cutoff_price) / cutoff_price) * 100
+    
+    # Determine direction
+    direction = "up" if change_pct > 0 else "down"
+    
+    return direction, change_pct
+
+def run_backtest(data, session_open_hour_utc, cutoff_hours=12, num_matches=5, test_days=30):
+    """
+    Run backtest for the most recent days using specified session open time
+    
+    Parameters:
+    - data: DataFrame of price data
+    - session_open_hour_utc: Hour of day (UTC) when session starts
+    - cutoff_hours: Hours after session open to make prediction (default: 12 hours)
+    - num_matches: Number of similar patterns to find (default: 5)
+    - test_days: Number of most recent sessions to test (default: 30)
+    """
+    if data is None or data.empty:
+        st.error("No data available for backtesting.")
         return None
     
-    # Count up vs down patterns
-    up_count = sum(1 for m in top_matches if m['end_value'] > 0)
-    down_count = sum(1 for m in top_matches if m['end_value'] <= 0)
-    total_count = up_count + down_count
+    # Get all session dates
+    all_session_dates = sorted(set(
+        get_session_date(ts, session_open_hour_utc) for ts in data.index
+    ))
     
-    # Calculate average ending values by trend
-    up_values = [m['end_value'] for m in top_matches if m['end_value'] > 0]
-    down_values = [m['end_value'] for m in top_matches if m['end_value'] <= 0]
-    all_values = up_values + down_values
+    # Filter out incomplete sessions (dates that don't have data after cutoff)
+    valid_session_dates = []
+    for date in all_session_dates:
+        session_data = get_session_data(data, date, session_open_hour_utc)
+        if session_data.empty:
+            continue
+        
+        # Calculate session start and cutoff times
+        session_start = datetime.combine(date - timedelta(days=1), time(hour=session_open_hour_utc))
+        session_start = pytz.utc.localize(session_start)
+        cutoff_time = session_start + timedelta(hours=cutoff_hours)
+        
+        # Check if we have data after the cutoff
+        after_cutoff = session_data[session_data.index > cutoff_time]
+        if not after_cutoff.empty:
+            valid_session_dates.append(date)
     
-    avg_up = sum(up_values) / len(up_values) if up_values else 0
-    avg_down = sum(down_values) / len(down_values) if down_values else 0
-    avg_all = sum(all_values) / len(all_values) if all_values else 0
+    # Make sure we have enough valid sessions
+    if len(valid_session_dates) < 5:
+        st.error(f"Not enough complete sessions found. Need at least 5 sessions for backtesting.")
+        return None
     
-    # Calculate weighted average by similarity (inverse of MSE)
-    weights = [1/m['similarity'] for m in top_matches]
-    weighted_values = [m['end_value'] * (1/m['similarity']) for m in top_matches]
-    weighted_avg = sum(weighted_values) / sum(weights) if weights else 0
+    # Use the most recent valid dates for testing (limited by available data)
+    test_days = min(test_days, len(valid_session_dates))
+    test_dates = valid_session_dates[-test_days:]
     
-    # Calculate confidence based on agreement
-    if total_count > 0:
-        if up_count > down_count:
-            confidence = up_count / total_count
-            direction = "up"
-        elif down_count > up_count:
-            confidence = down_count / total_count
-            direction = "down"
-        else:
-            confidence = 0.5
-            direction = "up" if avg_all > 0 else "down"
+    st.info(f"Running backtest on {len(test_dates)} sessions from {test_dates[0]} to {test_dates[-1]}...")
+    
+    # Progress bar
+    progress_bar = st.progress(0)
+    progress_text = st.empty()
+    
+    # Create results dataframe
+    results = []
+    
+    # Run backtest for each test date
+    for i, test_date in enumerate(test_dates):
+        progress_text.text(f"Testing session {i+1}/{len(test_dates)}: {test_date}")
+        progress_bar.progress((i+1)/len(test_dates))
+        
+        # Get historical dates (sessions before test_date)
+        historical_dates = [d for d in valid_session_dates if d < test_date]
+        
+        # Ensure we have enough historical dates
+        if len(historical_dates) < num_matches:
+            continue
+        
+        # Calculate pattern up to cutoff
+        target_pattern = calculate_pattern_cutoff(data, test_date, session_open_hour_utc, cutoff_hours)
+        
+        if target_pattern is None or len(target_pattern) < 5:
+            continue
+        
+        # Create historical patterns dictionary
+        historical_patterns = {}
+        for hist_date in historical_dates[-30:]:  # Limit to last 30 sessions for speed
+            hist_pattern = calculate_pattern_cutoff(data, hist_date, session_open_hour_utc, cutoff_hours)
+            if hist_pattern is not None and len(hist_pattern) >= 5:
+                historical_patterns[hist_date] = hist_pattern
+        
+        # Skip if we don't have enough historical patterns
+        if len(historical_patterns) < num_matches:
+            continue
+            
+        # Find similar days
+        similar_patterns = find_similar_sessions(
+            target_pattern, 
+            historical_patterns, 
+            num_matches=num_matches
+        )
+        
+        if not similar_patterns:
+            continue
+        
+        # Predict direction
+        pred_direction, confidence, avg_magnitude = predict_direction(similar_patterns)
+        
+        # Calculate actual result
+        actual_direction, actual_change = calculate_actual_result(
+            data, test_date, session_open_hour_utc, cutoff_hours
+        )
+        
+        if actual_direction is None:
+            continue
+        
+        # Store result
+        result = {
+            'date': test_date,
+            'predicted_direction': pred_direction,
+            'confidence': confidence,
+            'avg_magnitude': avg_magnitude,
+            'actual_direction': actual_direction,
+            'actual_change': actual_change,
+            'correct': pred_direction == actual_direction,
+            'similar_dates': [p['date'] for p in similar_patterns],
+            'similarities': [p['similarity'] for p in similar_patterns]
+        }
+        
+        results.append(result)
+    
+    # Clear progress indicators
+    progress_bar.empty()
+    progress_text.empty()
+    
+    # Convert to DataFrame
+    if results:
+        results_df = pd.DataFrame(results)
+        st.success(f"Backtest complete! Generated {len(results)} test cases.")
+        return results_df
     else:
-        confidence = 0
-        direction = "neutral"
-    
-    # Calculate expected magnitude
-    expected_magnitude = abs(avg_all)
-    
-    # Determine confidence level
-    if confidence >= 0.8:
-        confidence_level = "High"
-    elif confidence >= 0.6:
-        confidence_level = "Medium"
-    else:
-        confidence_level = "Low"
-    
-    # Determine magnitude level
-    if expected_magnitude >= 2.0:
-        magnitude_level = "Large"
-    elif expected_magnitude >= 1.0:
-        magnitude_level = "Medium"
-    else:
-        magnitude_level = "Small"
-    
-    # Return metrics
-    return {
-        'direction': direction,
-        'confidence': confidence,
-        'confidence_level': confidence_level,
-        'expected_magnitude': expected_magnitude,
-        'magnitude_level': magnitude_level,
-        'avg_all': avg_all,
-        'avg_up': avg_up,
-        'avg_down': avg_down,
-        'weighted_avg': weighted_avg,
-        'up_count': up_count,
-        'down_count': down_count,
-        'total_count': total_count
-    }
+        st.warning("No valid backtest results could be generated. Try using a different interval or fewer test days.")
+        return None
 
-# Backtesting Visualization Functions ----------------------------------------------------------------------------------
 def plot_backtest_results(results_df):
     """Create Plotly visualization of backtest results"""
     if results_df is None or results_df.empty:
@@ -829,11 +1029,27 @@ def plot_session_example(data, session_date, cutoff_hours, similar_patterns, sym
     )
     
     # Add vertical line at cutoff
-    fig.add_vline(
+    fig.add_trace(
+        go.Scatter(
+            x=[cutoff_time, cutoff_time],
+            y=[min(session_percent) - 1, max(session_percent) + 1],
+            mode='lines',
+            line=dict(color='yellow', width=2, dash='dash'),
+            showlegend=False,
+            name="Cutoff"
+        )
+    )
+
+    # Add annotation for the cutoff line
+    fig.add_annotation(
         x=cutoff_time,
-        line=dict(color='yellow', width=2, dash='dash'),
-        annotation_text=f"Cutoff ({cutoff_hours}h after open)",
-        annotation_position="top right"
+        y=max(session_percent) + 0.5,
+        text=f"Cutoff ({cutoff_hours}h after open)",
+        showarrow=False,
+        font=dict(color="yellow"),
+        bgcolor="rgba(0,0,0,0.5)",
+        bordercolor="yellow",
+        borderwidth=1
     )
     
     # Add top matching patterns
@@ -919,197 +1135,6 @@ def plot_session_example(data, session_date, cutoff_hours, similar_patterns, sym
     )
     
     return fig
-
-# Backtesting functions ----------------------------------------------------------------------------------
-def calculate_actual_result(data, session_date, session_open_hour_utc, cutoff_hours=12):
-    """
-    Calculate actual result from cutoff time to end of session
-    """
-    # Get data for this session
-    session_data = get_session_data(data, session_date, session_open_hour_utc)
-    
-    if session_data.empty:
-        return None, 0
-    
-    # Calculate cutoff time (X hours after session open)
-    session_start = datetime.combine(session_date - timedelta(days=1), time(hour=session_open_hour_utc))
-    session_start = pytz.utc.localize(session_start)
-    
-    cutoff_time = session_start + timedelta(hours=cutoff_hours)
-    
-    # Split data at cutoff
-    before_cutoff = session_data[session_data.index <= cutoff_time]
-    after_cutoff = session_data[session_data.index > cutoff_time]
-    
-    if before_cutoff.empty or after_cutoff.empty:
-        return None, 0
-    
-    # Price at cutoff
-    cutoff_price = before_cutoff['Close'].iloc[-1]
-    
-    # End of session price
-    end_price = after_cutoff['Close'].iloc[-1]
-    
-    # Calculate change
-    change_pct = ((end_price - cutoff_price) / cutoff_price) * 100
-    
-    # Determine direction
-    direction = "up" if change_pct > 0 else "down"
-    
-    return direction, change_pct
-
-def check_data_availability(symbol, interval="5m"):
-    """
-    Check what data interval and period combinations are available for the symbol
-    Returns the maximum number of days available for the selected interval
-    """
-    try:
-        # Test different periods to determine availability
-        periods = ["7d", "30d", "60d", "90d"]
-        max_days = 0
-        
-        for period in periods:
-            try:
-                ticker = yf.Ticker(symbol)
-                data = ticker.history(period=period, interval=interval)
-                
-                if not data.empty:
-                    start_date = data.index.min()
-                    end_date = data.index.max()
-                    duration = (end_date - start_date).days
-                    
-                    if duration > max_days:
-                        max_days = duration
-            except Exception:
-                pass
-        
-        return max_days
-    except Exception as e:
-        st.error(f"Error checking data availability: {str(e)}")
-        return 30  # Default to 30 days as a safe value    
-
-def run_backtest(data, session_open_hour_utc, cutoff_hours=12, num_matches=5, test_days=30):
-    """
-    Run backtest for the most recent days using specified session open time
-    
-    Parameters:
-    - data: DataFrame of price data
-    - session_open_hour_utc: Hour of day (UTC) when session starts
-    - cutoff_hours: Hours after session open to make prediction (default: 12 hours)
-    - num_matches: Number of similar patterns to find (default: 5)
-    - test_days: Number of most recent sessions to test (default: 30)
-    """
-    if data is None or data.empty:
-        st.error("No data available for backtesting.")
-        return None
-    
-    # Get all session dates
-    all_session_dates = sorted(set(
-        get_session_date(ts, session_open_hour_utc) for ts in data.index
-    ))
-    
-    # Filter out incomplete sessions (dates that don't have data after cutoff)
-    valid_session_dates = []
-    for date in all_session_dates:
-        session_data = get_session_data(data, date, session_open_hour_utc)
-        if session_data.empty:
-            continue
-        
-        # Calculate session start and cutoff times
-        session_start = datetime.combine(date - timedelta(days=1), time(hour=session_open_hour_utc))
-        session_start = pytz.utc.localize(session_start)
-        cutoff_time = session_start + timedelta(hours=cutoff_hours)
-        
-        # Check if we have data after the cutoff
-        after_cutoff = session_data[session_data.index > cutoff_time]
-        if not after_cutoff.empty:
-            valid_session_dates.append(date)
-    
-    # Use the most recent valid dates for testing
-    if len(valid_session_dates) <= test_days:
-        test_dates = valid_session_dates
-    else:
-        test_dates = valid_session_dates[-test_days:]
-    
-    # Progress bar
-    progress_bar = st.progress(0)
-    progress_text = st.empty()
-    
-    # Create results dataframe
-    results = []
-    
-    # Run backtest for each test date
-    for i, test_date in enumerate(test_dates):
-        progress_text.text(f"Testing session {i+1}/{len(test_dates)}: {test_date}")
-        progress_bar.progress((i+1)/len(test_dates))
-        
-        # Get historical dates (sessions before test_date)
-        historical_dates = [d for d in valid_session_dates if d < test_date]
-        
-        # Ensure we have enough historical dates
-        if len(historical_dates) < 5:
-            continue
-        
-        # Calculate pattern up to cutoff
-        target_pattern = calculate_pattern_cutoff(data, test_date, session_open_hour_utc, cutoff_hours)
-        
-        if target_pattern is None or len(target_pattern) < 5:
-            continue
-        
-        # Create historical patterns dictionary
-        historical_patterns = {}
-        for hist_date in historical_dates:
-            hist_pattern = calculate_pattern_cutoff(data, hist_date, session_open_hour_utc, cutoff_hours)
-            if hist_pattern is not None and len(hist_pattern) >= 5:
-                historical_patterns[hist_date] = hist_pattern
-        
-        # Find similar days
-        similar_patterns = find_similar_sessions(
-            target_pattern, 
-            historical_patterns, 
-            num_matches=num_matches
-        )
-        
-        if not similar_patterns:
-            continue
-        
-        # Predict direction
-        pred_direction, confidence, avg_magnitude = predict_direction(similar_patterns)
-        
-        # Calculate actual result
-        actual_direction, actual_change = calculate_actual_result(
-            data, test_date, session_open_hour_utc, cutoff_hours
-        )
-        
-        if actual_direction is None:
-            continue
-        
-        # Store result
-        result = {
-            'date': test_date,
-            'predicted_direction': pred_direction,
-            'confidence': confidence,
-            'avg_magnitude': avg_magnitude,
-            'actual_direction': actual_direction,
-            'actual_change': actual_change,
-            'correct': pred_direction == actual_direction,
-            'similar_dates': [p['date'] for p in similar_patterns],
-            'similarities': [p['similarity'] for p in similar_patterns]
-        }
-        
-        results.append(result)
-    
-    # Clear progress indicators
-    progress_bar.empty()
-    progress_text.empty()
-    
-    # Convert to DataFrame
-    if results:
-        results_df = pd.DataFrame(results)
-        return results_df
-    else:
-        st.warning("No valid backtest results could be generated. Try different parameters.")
-        return None
 
 # Main Streamlit application ----------------------------------------------------------------------------------
 def main():
@@ -1483,7 +1508,6 @@ def main():
                     # Run backtest
                     results_df = run_backtest(
                         data=bt_data,
-                        symbol=bt_symbol,
                         session_open_hour_utc=bt_session_hour,
                         cutoff_hours=bt_cutoff_hours,
                         num_matches=bt_num_matches,
@@ -1576,4 +1600,4 @@ def main():
                     """)
 
 if __name__ == "__main__":
-    main()        
+    main()           
