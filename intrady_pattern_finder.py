@@ -1136,10 +1136,635 @@ def plot_session_example(data, session_date, cutoff_hours, similar_patterns, sym
     
     return fig
 
+ # Next Session Prediction Functions ----------------------------------------------------------------------------------
+
+def calculate_session_returns(sessions):
+    """Calculate return metrics for each session"""
+    returns = {}
+    
+    for date, session_data in sessions.items():
+        if len(session_data) < 5:
+            continue
+            
+        # Calculate returns
+        session_open = session_data['Open'].iloc[0]
+        session_close = session_data['Close'].iloc[-1]
+        session_return = (session_close - session_open) / session_open * 100
+        
+        # Calculate high and low points
+        session_high = session_data['High'].max()
+        session_low = session_data['Low'].min()
+        
+        high_return = (session_high - session_open) / session_open * 100
+        low_return = (session_low - session_open) / session_open * 100
+        
+        returns[date] = {
+            'session_return': session_return,
+            'high_return': high_return,
+            'low_return': low_return,
+            'direction': 'up' if session_return > 0 else 'down'
+        }
+    
+    return returns
+
+def predict_next_session(similar_patterns, session_returns):
+    """
+    Predict next session performance based on similar patterns
+    
+    Parameters:
+    - similar_patterns: List of similar pattern dictionaries
+    - session_returns: Dictionary of session return metrics
+    """
+    if not similar_patterns:
+        return None
+    
+    next_session_predictions = []
+    
+    for pattern in similar_patterns:
+        pattern_date = pattern['date']
+        next_session_date = pattern_date + timedelta(days=1)
+        
+        # Check if we have data for the next session
+        if next_session_date in session_returns:
+            next_session_metrics = session_returns[next_session_date]
+            
+            next_session_predictions.append({
+                'pattern_date': pattern_date,
+                'next_session_date': next_session_date,
+                'similarity': pattern['similarity'],
+                'next_session_return': next_session_metrics['session_return'],
+                'next_session_high': next_session_metrics['high_return'],
+                'next_session_low': next_session_metrics['low_return'],
+                'next_session_direction': next_session_metrics['direction']
+            })
+    
+    return next_session_predictions
+
+def calculate_next_session_prediction(next_session_predictions):
+    """
+    Calculate aggregated prediction for next session
+    
+    Parameters:
+    - next_session_predictions: List of dictionaries with next session metrics
+    """
+    if not next_session_predictions:
+        return None
+    
+    # Count directions
+    up_count = sum(1 for p in next_session_predictions if p['next_session_direction'] == 'up')
+    down_count = len(next_session_predictions) - up_count
+    
+    # Calculate average returns
+    avg_return = sum(p['next_session_return'] for p in next_session_predictions) / len(next_session_predictions)
+    avg_high = sum(p['next_session_high'] for p in next_session_predictions) / len(next_session_predictions)
+    avg_low = sum(p['next_session_low'] for p in next_session_predictions) / len(next_session_predictions)
+    
+    # Calculate similarity-weighted average
+    weights = [1/p['similarity'] for p in next_session_predictions]
+    total_weight = sum(weights)
+    
+    weighted_return = sum(p['next_session_return'] * (1/p['similarity']) for p in next_session_predictions) / total_weight
+    weighted_high = sum(p['next_session_high'] * (1/p['similarity']) for p in next_session_predictions) / total_weight
+    weighted_low = sum(p['next_session_low'] * (1/p['similarity']) for p in next_session_predictions) / total_weight
+    
+    # Calculate confidence
+    total_count = up_count + down_count
+    if total_count > 0:
+        if up_count > down_count:
+            confidence = up_count / total_count
+            direction = 'up'
+        else:
+            confidence = down_count / total_count
+            direction = 'down'
+    else:
+        confidence = 0.5
+        direction = 'up' if avg_return > 0 else 'down'
+    
+    # Determine confidence level
+    if confidence >= 0.8:
+        confidence_level = "High"
+    elif confidence >= 0.6:
+        confidence_level = "Medium"
+    else:
+        confidence_level = "Low"
+    
+    # Determine magnitude level
+    expected_magnitude = abs(avg_return)
+    if expected_magnitude >= 2.0:
+        magnitude_level = "Large"
+    elif expected_magnitude >= 1.0:
+        magnitude_level = "Medium"
+    else:
+        magnitude_level = "Small"
+    
+    return {
+        'predicted_direction': direction,
+        'confidence': confidence,
+        'confidence_level': confidence_level,
+        'avg_return': avg_return,
+        'avg_high': avg_high,
+        'avg_low': avg_low,
+        'weighted_return': weighted_return,
+        'weighted_high': weighted_high,
+        'weighted_low': weighted_low,
+        'expected_magnitude': expected_magnitude,
+        'magnitude_level': magnitude_level,
+        'up_count': up_count,
+        'down_count': down_count,
+        'total_count': total_count
+    }
+
+def run_next_session_backtest(data, session_open_hour_utc, cutoff_hours=12, num_matches=5, test_days=20):
+    """
+    Run backtest for next session predictions
+    
+    Parameters:
+    - data: DataFrame of price data
+    - session_open_hour_utc: Hour of day (UTC) when session starts
+    - cutoff_hours: Hours after session open to make the prediction
+    - num_matches: Number of similar patterns to use
+    - test_days: Number of days to test
+    """
+    if data is None or data.empty:
+        st.error("No data available for backtesting.")
+        return None
+    
+    # Get all session dates
+    all_session_dates = sorted(set(
+        get_session_date(ts, session_open_hour_utc) for ts in data.index
+    ))
+    
+    # Get sessions data
+    sessions = {}
+    for date in all_session_dates:
+        session_data = get_session_data(data, date, session_open_hour_utc)
+        if not session_data.empty:
+            sessions[date] = session_data
+    
+    # Calculate returns for all sessions
+    session_returns = calculate_session_returns(sessions)
+    
+    # Filter dates to ensure we have next-day data
+    valid_test_dates = []
+    for date in all_session_dates:
+        next_date = date + timedelta(days=1)
+        if next_date in session_returns:
+            valid_test_dates.append(date)
+    
+    # Make sure we have enough valid sessions
+    if len(valid_test_dates) < 5:
+        st.error(f"Not enough complete session pairs found. Need at least 5 sessions for backtesting.")
+        return None
+    
+    # Use the most recent valid dates for testing (limited by available data)
+    test_days = min(test_days, len(valid_test_dates))
+    test_dates = valid_test_dates[-test_days:]
+    
+    st.info(f"Running next session prediction backtest on {len(test_dates)} sessions from {test_dates[0]} to {test_dates[-1]}...")
+    
+    # Progress bar
+    progress_bar = st.progress(0)
+    progress_text = st.empty()
+    
+    # Store backtest results
+    results = []
+
+    # Run backtest for each test date
+    for i, test_date in enumerate(test_dates):
+        progress_text.text(f"Testing session {i+1}/{len(test_dates)}: {test_date}")
+        progress_bar.progress((i+1)/len(test_dates))
+        
+        # Get historical dates (sessions before test_date)
+        historical_dates = [d for d in valid_test_dates if d < test_date]
+        
+        # Ensure we have enough historical dates
+        if len(historical_dates) < num_matches:
+            continue
+        
+        # Calculate pattern up to cutoff
+        target_pattern = calculate_pattern_cutoff(data, test_date, session_open_hour_utc, cutoff_hours)
+        
+        if target_pattern is None or len(target_pattern) < 5:
+            continue
+        
+        # Create historical patterns dictionary
+        historical_patterns = {}
+        for hist_date in historical_dates[-30:]:  # Limit to last 30 sessions for speed
+            hist_pattern = calculate_pattern_cutoff(data, hist_date, session_open_hour_utc, cutoff_hours)
+            if hist_pattern is not None and len(hist_pattern) >= 5:
+                historical_patterns[hist_date] = hist_pattern
+        
+        # Skip if we don't have enough historical patterns
+        if len(historical_patterns) < num_matches:
+            continue
+            
+        # Find similar days
+        similar_patterns = find_similar_sessions(
+            target_pattern, 
+            historical_patterns, 
+            num_matches=num_matches
+        )
+        
+        if not similar_patterns:
+            continue
+        
+        # Predict next session
+        next_session_predictions = predict_next_session(similar_patterns, session_returns)
+        
+        if not next_session_predictions:
+            continue
+        
+        # Calculate aggregated prediction
+        prediction = calculate_next_session_prediction(next_session_predictions)
+        
+        if not prediction:
+            continue
+        
+        # Get actual next session performance
+        next_date = test_date + timedelta(days=1)
+        
+        if next_date not in session_returns:
+            continue
+        
+        actual_next = session_returns[next_date]
+        
+        # Record result
+        result = {
+            'test_date': test_date,
+            'next_date': next_date,
+            'predicted_direction': prediction['predicted_direction'],
+            'actual_direction': actual_next['direction'],
+            'correct_direction': prediction['predicted_direction'] == actual_next['direction'],
+            'confidence': prediction['confidence'],
+            'confidence_level': prediction['confidence_level'],
+            'predicted_return': prediction['avg_return'],
+            'actual_return': actual_next['session_return'],
+            'return_error': abs(prediction['avg_return'] - actual_next['session_return']),
+            'predicted_high': prediction['avg_high'],
+            'actual_high': actual_next['high_return'],
+            'high_error': abs(prediction['avg_high'] - actual_next['high_return']),
+            'predicted_low': prediction['avg_low'],
+            'actual_low': actual_next['low_return'],
+            'low_error': abs(prediction['avg_low'] - actual_next['low_return']),
+            'weighted_return': prediction['weighted_return'],
+            'expected_magnitude': prediction['expected_magnitude'],
+            'magnitude_level': prediction['magnitude_level'],
+            'similar_patterns_count': len(similar_patterns),
+            'up_count': prediction['up_count'],
+            'down_count': prediction['down_count'],
+            'similar_dates': [p['date'] for p in similar_patterns],
+            'similarities': [p['similarity'] for p in similar_patterns]
+        }
+        
+        results.append(result)
+    
+    # Clear progress indicators
+    progress_bar.empty()
+    progress_text.empty()
+    
+    # Convert to DataFrame
+    if results:
+        results_df = pd.DataFrame(results)
+        st.success(f"Next session backtest complete! Generated {len(results)} test cases.")
+        return results_df
+    else:
+        st.warning("No valid next session backtest results could be generated. Try different parameters.")
+        return None
+
+def plot_next_session_results(results_df):
+    """Create visualizations of next session backtest results"""
+    if results_df is None or results_df.empty:
+        st.error("No next session backtest results to visualize")
+        return None, None, None, None
+    
+    # Overall accuracy
+    correct_predictions = results_df['correct_direction'].sum()
+    total_predictions = len(results_df)
+    accuracy = correct_predictions / total_predictions if total_predictions > 0 else 0
+    
+    # Create main results figure - actual returns colored by correct prediction
+    results_df['color'] = results_df['correct_direction'].map({True: 'green', False: 'red'})
+    
+    # Chronological results chart
+    time_fig = go.Figure()
+    
+    time_fig.add_trace(
+        go.Scatter(
+            x=results_df['next_date'],
+            y=results_df['actual_return'],
+            mode='markers',
+            marker=dict(
+                size=10,
+                color=results_df['color'],
+                symbol='circle'
+            ),
+            name='Actual Next Session Return',
+            text=[f"Date: {d}<br>Predicted: {p}<br>Actual: {a}<br>Return: {r:.2f}%<br>Confidence: {conf:.1%}" 
+                  for d, p, a, r, conf in zip(
+                      results_df['next_date'], 
+                      results_df['predicted_direction'], 
+                      results_df['actual_direction'], 
+                      results_df['actual_return'],
+                      results_df['confidence'])],
+            hoverinfo='text'
+        )
+    )
+    
+    # Add horizontal line at zero
+    time_fig.add_hline(y=0, line=dict(color='white', width=1, dash='dash'))
+    
+    # Update layout
+    time_fig.update_layout(
+        title='Next Session Backtest Results: Actual Returns',
+        xaxis_title='Next Session Date',
+        yaxis_title='Actual Return (%)',
+        template='plotly_dark',
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+        height=400
+    )
+    
+    # Create comparison scatter plot - predicted vs actual returns
+    compare_fig = go.Figure()
+    
+    compare_fig.add_trace(
+        go.Scatter(
+            x=results_df['predicted_return'],
+            y=results_df['actual_return'],
+            mode='markers',
+            marker=dict(
+                size=10,
+                color=results_df['color'],
+                symbol='circle'
+            ),
+            name='Returns',
+            text=[f"Date: {d}<br>Predicted: {p:.2f}%<br>Actual: {a:.2f}%<br>Error: {e:.2f}%<br>Confidence: {conf:.1%}" 
+                  for d, p, a, e, conf in zip(
+                      results_df['next_date'], 
+                      results_df['predicted_return'], 
+                      results_df['actual_return'],
+                      results_df['return_error'],
+                      results_df['confidence'])],
+            hoverinfo='text'
+        )
+    )
+    
+    # Add reference line (perfect prediction)
+    compare_fig.add_trace(
+        go.Scatter(
+            x=[-10, 10],
+            y=[-10, 10],
+            mode='lines',
+            line=dict(color='gray', width=1, dash='dash'),
+            showlegend=False
+        )
+    )
+    
+    # Add quadrant lines
+    compare_fig.add_hline(y=0, line=dict(color='white', width=1, dash='dash'))
+    compare_fig.add_vline(x=0, line=dict(color='white', width=1, dash='dash'))
+    
+    # Update layout
+    compare_fig.update_layout(
+        title='Predicted vs Actual Next Session Returns',
+        xaxis_title='Predicted Return (%)',
+        yaxis_title='Actual Return (%)',
+        template='plotly_dark',
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+        height=400
+    )
+    
+    # Create confidence level chart
+    # Accuracy by confidence level
+    results_df['confidence_bucket'] = pd.cut(results_df['confidence'], 
+                                            bins=[0, 0.6, 0.8, 1.0],
+                                            labels=['Low (0-60%)', 'Medium (60-80%)', 'High (80-100%)'])
+    
+    conf_accuracy = results_df.groupby('confidence_bucket')['correct_direction'].agg(['count', 'mean'])
+    conf_accuracy.columns = ['Count', 'Accuracy']
+    
+    conf_fig = go.Figure()
+    
+    for i, (level, row) in enumerate(conf_accuracy.iterrows()):
+        if pd.isna(level) or pd.isna(row['Accuracy']):
+            continue
+            
+        color = 'rgba(255, 99, 132, 0.7)' if row['Accuracy'] < 0.55 else 'rgba(75, 192, 192, 0.7)'
+        
+        conf_fig.add_trace(
+            go.Bar(
+                x=[level],
+                y=[row['Accuracy']],
+                text=[f"{row['Count']} predictions<br>{row['Accuracy']:.1%} accuracy"],
+                textposition='auto',
+                marker_color=color,
+                name=str(level)
+            )
+        )
+    
+    conf_fig.update_layout(
+        title='Next Session Accuracy by Confidence Level',
+        xaxis_title='Confidence Level',
+        yaxis_title='Accuracy',
+        template='plotly_dark',
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+        height=300,
+        yaxis=dict(range=[0, 1])
+    )
+    
+    # Create magnitude level chart
+    results_df['return_magnitude'] = results_df['magnitude_level']
+    
+    mag_accuracy = results_df.groupby('return_magnitude')['correct_direction'].agg(['count', 'mean'])
+    mag_accuracy.columns = ['Count', 'Accuracy']
+    
+    mag_fig = go.Figure()
+    
+    for i, (level, row) in enumerate(mag_accuracy.iterrows()):
+        if pd.isna(level) or pd.isna(row['Accuracy']):
+            continue
+            
+        color = 'rgba(255, 99, 132, 0.7)' if row['Accuracy'] < 0.55 else 'rgba(75, 192, 192, 0.7)'
+        
+        mag_fig.add_trace(
+            go.Bar(
+                x=[level],
+                y=[row['Accuracy']],
+                text=[f"{row['Count']} predictions<br>{row['Accuracy']:.1%} accuracy"],
+                textposition='auto',
+                marker_color=color,
+                name=str(level)
+            )
+        )
+    
+    mag_fig.update_layout(
+        title='Next Session Accuracy by Expected Magnitude',
+        xaxis_title='Expected Magnitude',
+        yaxis_title='Accuracy',
+        template='plotly_dark',
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+        height=300,
+        yaxis=dict(range=[0, 1])
+    )
+    
+    return time_fig, compare_fig, conf_fig, mag_fig
+
+def plot_next_session_example(data, test_date, next_date, similar_patterns_dates, cutoff_hours, symbol, session_open_hour_utc):
+    """Plot example next session prediction for backtesting analysis"""
+    # Get test session data
+    test_session_data = get_session_data(data, test_date, session_open_hour_utc)
+    
+    # Get next session data
+    next_session_data = get_session_data(data, next_date, session_open_hour_utc)
+    
+    if test_session_data.empty or next_session_data.empty:
+        st.error(f"No data available for sessions {test_date} and {next_date}")
+        return None
+    
+    # Calculate session start times
+    test_session_start = datetime.combine(test_date - timedelta(days=1), time(hour=session_open_hour_utc))
+    test_session_start = pytz.utc.localize(test_session_start)
+    
+    next_session_start = datetime.combine(next_date - timedelta(days=1), time(hour=session_open_hour_utc))
+    next_session_start = pytz.utc.localize(next_session_start)
+    
+    # Calculate cutoff time
+    cutoff_time = test_session_start + timedelta(hours=cutoff_hours)
+    
+    # Create the figure
+    fig = go.Figure()
+    
+    # Calculate percent change from test session open
+    test_open = test_session_data['Open'].iloc[0]
+    test_percent = ((test_session_data['Close'] - test_open) / test_open) * 100
+    
+    # Calculate percent change from next session open (maintaining the scale)
+    next_open = next_session_data['Open'].iloc[0]
+    next_percent = ((next_session_data['Close'] - next_open) / next_open) * 100
+    
+    # Adjust next session percentage to make it continuous with the end of test session
+    last_test_percent = test_percent.iloc[-1]
+    
+    # Plot test day data
+    fig.add_trace(
+        go.Scatter(
+            x=test_session_data.index,
+            y=test_percent,
+            mode='lines',
+            name=f"{test_date} Session",
+            line=dict(color='white', width=3)
+        )
+    )
+    
+    # Plot next day data
+    fig.add_trace(
+        go.Scatter(
+            x=next_session_data.index,
+            y=next_percent + last_test_percent,
+            mode='lines',
+            name=f"{next_date} Next Session",
+            line=dict(color='lightgreen', width=3)
+        )
+    )
+    
+    # Add vertical line at cutoff
+    # Use a scatter trace for datetime compatibility
+    y_range = [min(test_percent) - 1, max(test_percent) + max(next_percent) + 2]
+    fig.add_trace(
+        go.Scatter(
+            x=[cutoff_time, cutoff_time],
+            y=y_range,
+            mode='lines',
+            line=dict(color='yellow', width=2, dash='dash'),
+            showlegend=False,
+            name="Cutoff"
+        )
+    )
+    
+    # Add annotation for the cutoff line
+    fig.add_annotation(
+        x=cutoff_time,
+        y=max(test_percent) + 1,
+        text=f"Prediction Point ({cutoff_hours}h after session start)",
+        showarrow=False,
+        font=dict(color="yellow"),
+        bgcolor="rgba(0,0,0,0.5)",
+        bordercolor="yellow",
+        borderwidth=1
+    )
+    
+    # Add vertical line at session boundary
+    fig.add_trace(
+        go.Scatter(
+            x=[next_session_start, next_session_start],
+            y=y_range,
+            mode='lines',
+            line=dict(color='cyan', width=2, dash='dash'),
+            showlegend=False,
+            name="Next Session Start"
+        )
+    )
+    
+    # Add annotation for next session
+    fig.add_annotation(
+        x=next_session_start,
+        y=max(test_percent) + 0.5,
+        text=f"Next Session Start",
+        showarrow=False,
+        font=dict(color="cyan"),
+        bgcolor="rgba(0,0,0,0.5)",
+        bordercolor="cyan",
+        borderwidth=1
+    )
+    
+    # Get session name based on hour
+    session_name = "Custom"
+    if session_open_hour_utc == 0:
+        session_name = "Asia"
+    elif session_open_hour_utc == 13:
+        session_name = "New York"
+    elif session_open_hour_utc == 7:
+        session_name = "London"
+    
+    # Update layout
+    fig.update_layout(
+        title=f"{symbol} - Example Next {session_name} Session Prediction (Current: {test_date}, Next: {next_date})",
+        xaxis_title="Time (UTC)",
+        yaxis_title="Price Change from Session Open (%)",
+        template='plotly_dark',
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
+        height=500
+    )
+    
+    # Show vertical grid lines at hourly intervals
+    fig.update_xaxes(
+        showgrid=True,
+        gridwidth=1,
+        gridcolor='rgba(128,128,128,0.2)',
+        zeroline=True,
+        zerolinecolor='rgba(255,255,255,0.2)'
+    )
+    
+    fig.update_yaxes(
+        showgrid=True,
+        gridwidth=1,
+        gridcolor='rgba(128,128,128,0.2)',
+        zeroline=True,
+        zerolinecolor='rgba(255,255,255,0.2)',
+        zerolinewidth=2
+    )
+    
+    return fig   
+
 # Main Streamlit application ----------------------------------------------------------------------------------
 def main():
     # Add tab selection
-    tabs = st.tabs(["Pattern Finder", "Backtest"])
+    tabs = st.tabs(["Pattern Finder", "Backtest", "Next Session Prediction"])
     
     with tabs[0]:  # Pattern Finder tab
         st.markdown("### Identify similar historical trading patterns based on configurable session open times")
@@ -1186,7 +1811,8 @@ def main():
                     max_value=23,
                     value=9,
                     step=1,
-                    help="Select custom session start time in UTC"
+                    help="Select custom session start time in UTC",
+                    key="pf_custom_hour"  # Add this unique key
                 )
             
             # Interval selection
@@ -1203,16 +1829,18 @@ def main():
                 max_value=20,
                 value=10,
                 step=1,
-                help="Total number of matches to find (you can display fewer)"
+                help="Total number of matches to find (you can display fewer)",
+                key="pf_all_matches"  # Add this unique key
             )
-            
+                        
             display_matches = st.slider(
                 "Display on Chart:",
                 min_value=1,
                 max_value=min(10, all_matches),
                 value=min(5, all_matches),
                 step=1,
-                help="Number of matches to show on the chart"
+                help="Number of matches to show on the chart",
+                key="pf_display_matches"  # Add this unique key
             )
             
             # Display options
@@ -1223,7 +1851,7 @@ def main():
             # Group similar patterns
             group_patterns = st.checkbox("Group Similar Patterns", value=False, 
                                       help="Group patterns that are very similar to reduce redundancy")
-            
+
             # If user wants to group similar patterns, add threshold slider
             similarity_threshold = 0.8
             if group_patterns:
@@ -1233,7 +1861,8 @@ def main():
                     max_value=2.0,
                     value=0.8,
                     step=0.1,
-                    help="Patterns with similarity below this threshold will be grouped together"
+                    help="Patterns with similarity below this threshold will be grouped together",
+                    key="pf_similarity_threshold"  # Add this unique key
                 )
             
             # Add confidence filter
@@ -1593,5 +2222,350 @@ def main():
                     - 1d data: All available history
                     """)
 
+    with tabs[2]:  # Next Session Prediction tab
+        st.markdown("### Predict Next Session Performance Based on Current Pattern")
+        st.markdown("""
+        This tool analyzes the current session's pattern to predict the **next trading session's** performance.
+        
+        It backtests how well patterns from one session can predict the following session's direction and magnitude.
+        
+        > **Note**: Yahoo Finance provides limited intraday history (maximum of 60 days for 5-minute data). 
+        > This limits how far back we can test, but provides sufficient data for reliable analysis.
+        """)
+        
+        # UI layout
+        next_col1, next_col2 = st.columns([2, 1])
+        
+        with next_col2:
+            st.subheader("Next Session Prediction Settings")
+            ns_symbol = st.text_input("Symbol:", value="BTC-USD", key="ns_symbol").upper()
+            
+            # Session settings
+            ns_session_options = {
+                "Asia (UTC 00:00)": 0,
+                "London (UTC 07:00)": 7,
+                "New York (UTC 13:00)": 13,
+                "Custom": -1
+            }
+            
+            ns_selected_session = st.selectbox(
+                "Session Start Time:",
+                options=list(ns_session_options.keys()),
+                index=0,
+                key="ns_session"
+            )
+            
+            # If custom is selected, show hour input
+            ns_session_hour = ns_session_options[ns_selected_session]
+            if ns_session_hour == -1:  # Custom option
+                ns_session_hour = st.slider(
+                    "Custom Start Hour (UTC):",
+                    min_value=0,
+                    max_value=23,
+                    value=9,
+                    step=1,
+                    key="ns_custom_hour"
+                )
+                
+            # Prediction parameters
+            ns_cutoff_hours = st.slider(
+                "Prediction Time:",
+                min_value=1,
+                max_value=20,
+                value=12,
+                step=1,
+                help="Hours after session start to make prediction for next session"
+            )
+            
+            ns_interval = st.select_slider(
+                "Data Interval:",
+                options=["5m", "15m", "30m", "1h"],
+                value="5m",
+                key="ns_interval"
+            )
+            
+            # Check data availability before setting test days
+            available_days = check_data_availability(ns_symbol, interval=ns_interval)
+            max_test_days = min(30, max(10, available_days - 10))
+            
+            ns_test_days = st.slider(
+                "Test Days:",
+                min_value=5,
+                max_value=max_test_days,
+                value=min(15, max_test_days),
+                step=5,
+                help="Number of recent sessions to test for next session prediction"
+            )
+            
+            ns_num_matches = st.slider(
+                "Number of Patterns:",
+                min_value=3,
+                max_value=10,
+                value=5,
+                step=1,
+                help="Number of similar patterns to use for prediction",
+                key="ns_num_patterns"  # Add this unique key
+            )
+            
+            # Data availability info
+            st.info(f"Yahoo Finance provides approximately {available_days} days of {ns_interval} data for {ns_symbol}")
+            
+            # Run backtest button
+            ns_run_button = st.button("Run Next Session Prediction Backtest", type="primary", key="ns_run")
+        
+        with next_col1:
+            if ns_run_button:
+                # Fetch data for backtesting
+                with st.spinner(f"Fetching data for {ns_symbol}..."):
+                    # Try to get data for the specified interval
+                    ns_data = None
+                    try:
+                        # Calculate how many days we need to fetch
+                        days_to_fetch = min(60, ns_test_days + 20)  # Max 60 days due to Yahoo limitation
+                        
+                        ticker = yf.Ticker(ns_symbol)
+                        period = f"{days_to_fetch}d"
+                        ns_data = ticker.history(period=period, interval=ns_interval)
+                        
+                        if ns_data.empty:
+                            st.error(f"No {ns_interval} data available for {ns_symbol}.")
+                            # Try fallback to 5-minute data if necessary
+                            if ns_interval != "5m":
+                                st.info("Trying to fetch 5-minute data instead...")
+                                ns_data = ticker.history(period=period, interval="5m")
+                                if not ns_data.empty:
+                                    st.success("Successfully fetched 5-minute data")
+                    except Exception as e:
+                        st.error(f"Error fetching {ns_interval} data: {str(e)}")
+                        # Try fallback to 5-minute data
+                        try:
+                            st.info("Trying to fetch 5-minute data instead...")
+                            ns_data = ticker.history(period=period, interval="5m")
+                        except Exception as e2:
+                            st.error(f"Also failed to fetch 5-minute data: {str(e2)}")
+                
+                if ns_data is not None and not ns_data.empty:
+                    st.info(f"Running next session prediction backtest for {ns_symbol} with {ns_session_hour}:00 UTC session start...")
+                    
+                    # Run next session backtest
+                    ns_results_df = run_next_session_backtest(
+                        data=ns_data,
+                        session_open_hour_utc=ns_session_hour,
+                        cutoff_hours=ns_cutoff_hours,
+                        num_matches=ns_num_matches,
+                        test_days=ns_test_days
+                    )
+                    
+                    if ns_results_df is not None and not ns_results_df.empty:
+                        # Display results summary
+                        correct_count = ns_results_df['correct_direction'].sum()
+                        total_count = len(ns_results_df)
+                        accuracy = correct_count / total_count if total_count > 0 else 0
+                        
+                        st.header(f"Next Session Prediction Results: {ns_symbol}")
+                        
+                        # Summary metrics
+                        metrics_col1, metrics_col2, metrics_col3 = st.columns(3)
+                        with metrics_col1:
+                            st.metric("Direction Accuracy", f"{accuracy:.1%}")
+                        with metrics_col2:
+                            st.metric("Test Sessions", f"{total_count}")
+                        with metrics_col3:
+                            st.metric("Correct Predictions", f"{correct_count}/{total_count}")
+                        
+                        # Calculate average error for returns
+                        avg_return_error = ns_results_df['return_error'].mean()
+                        metrics_col1, metrics_col2, metrics_col3 = st.columns(3)
+                        with metrics_col1:
+                            st.metric("Avg Return Error", f"{avg_return_error:.2f}%")
+                        with metrics_col2:
+                            st.metric("Avg High Error", f"{ns_results_df['high_error'].mean():.2f}%")
+                        with metrics_col3:
+                            st.metric("Avg Low Error", f"{ns_results_df['low_error'].mean():.2f}%")
+                        
+                        # Plot results
+                        time_fig, compare_fig, conf_fig, mag_fig = plot_next_session_results(ns_results_df)
+                        
+                        # Display plots
+                        if time_fig:
+                            st.plotly_chart(time_fig, use_container_width=True)
+                        
+                        if compare_fig:
+                            st.plotly_chart(compare_fig, use_container_width=True)
+                        
+                        # Additional charts in columns
+                        chart_col1, chart_col2 = st.columns(2)
+                        with chart_col1:
+                            if conf_fig:
+                                st.plotly_chart(conf_fig, use_container_width=True)
+                        with chart_col2:
+                            if mag_fig:
+                                st.plotly_chart(mag_fig, use_container_width=True)
+                        
+                        # Up vs down prediction accuracy
+                        up_accuracy = ns_results_df[ns_results_df['predicted_direction'] == 'up']['correct_direction'].mean()
+                        down_accuracy = ns_results_df[ns_results_df['predicted_direction'] == 'down']['correct_direction'].mean()
+                        
+                        up_count = len(ns_results_df[ns_results_df['predicted_direction'] == 'up'])
+                        down_count = len(ns_results_df[ns_results_df['predicted_direction'] == 'down'])
+                        
+                        # Additional insights
+                        st.subheader("Additional Insights")
+                        st.markdown(f"""
+                        **Direction Prediction Accuracy:**
+                        - **Upward predictions**: {up_accuracy:.1%} accuracy ({up_count} predictions)
+                        - **Downward predictions**: {down_accuracy:.1%} accuracy ({down_count} predictions)
+                        
+                        **Return Prediction Performance:**
+                        - Mean absolute error for session returns: **{avg_return_error:.2f}%**
+                        - Mean absolute error for session highs: **{ns_results_df['high_error'].mean():.2f}%**
+                        - Mean absolute error for session lows: **{ns_results_df['low_error'].mean():.2f}%**
+                        """)
+                        
+                        # Display example session with prediction (if we have enough examples)
+                        if total_count >= 3:
+                            st.subheader("Example Next Session Prediction")
+                            
+                            # Try to find a good example (correct prediction with high confidence)
+                            good_examples = ns_results_df[(ns_results_df['correct_direction'] == True) & (ns_results_df['confidence'] > 0.6)]
+                            if not good_examples.empty:
+                                example_test_date = good_examples.iloc[0]['test_date']
+                                example_next_date = good_examples.iloc[0]['next_date']
+                                example_similar_dates = good_examples.iloc[0]['similar_dates']
+                                
+                                example_fig = plot_next_session_example(
+                                    ns_data, 
+                                    example_test_date, 
+                                    example_next_date,
+                                    example_similar_dates, 
+                                    ns_cutoff_hours, 
+                                    ns_symbol,
+                                    ns_session_hour
+                                )
+                                
+                                if example_fig:
+                                    st.plotly_chart(example_fig, use_container_width=True)
+                                    
+                                    # Add explanation
+                                    st.markdown(f"""
+                                    **Example Analysis:**
+                                    
+                                    This chart shows:
+                                    - The **white line** is the session where we make the prediction (at the yellow dotted line)
+                                    - The **green line** is the actual next session performance
+                                    - The yellow line shows when the prediction is made ({ns_cutoff_hours} hours into the session)
+                                    - The cyan line shows the start of the next session
+                                    
+                                    In this example, the pattern predicted a **{good_examples.iloc[0]['predicted_direction']}** trend 
+                                    with **{good_examples.iloc[0]['confidence']:.1%}** confidence, and the actual outcome
+                                    was a **{good_examples.iloc[0]['actual_return']:.2f}%** move in the 
+                                    **{good_examples.iloc[0]['actual_direction']}** direction.
+                                    """)
+                            
+                        # Current prediction if in a session now
+                        st.subheader("Current Next Session Prediction")
+                        current_time = datetime.now(pytz.utc)
+                        current_session_date = get_session_date(current_time, ns_session_hour)
+                        
+                        # Check if we're in a session and past the cutoff time
+                        session_start = datetime.combine(current_session_date - timedelta(days=1), time(hour=ns_session_hour))
+                        session_start = pytz.utc.localize(session_start)
+                        
+                        cutoff_time = session_start + timedelta(hours=ns_cutoff_hours)
+                        
+                        if current_time > cutoff_time:
+                            st.info("Calculating prediction for the next session based on current pattern...")
+                            
+                            # Get all sessions
+                            all_sessions = get_sessions(ns_data, ns_session_hour)
+                            
+                            # Calculate current session pattern up to cutoff
+                            current_pattern = calculate_pattern_cutoff(ns_data, current_session_date, ns_session_hour, ns_cutoff_hours)
+                            
+                            if current_pattern is not None and len(current_pattern) >= 5:
+                                # Get historical patterns
+                                historical_dates = sorted([d for d in all_sessions.keys() if d < current_session_date])
+                                
+                                if len(historical_dates) >= ns_num_matches:
+                                    # Calculate historical patterns
+                                    historical_patterns = {}
+                                    for hist_date in historical_dates[-30:]:
+                                        hist_pattern = calculate_pattern_cutoff(ns_data, hist_date, ns_session_hour, ns_cutoff_hours)
+                                        if hist_pattern is not None and len(hist_pattern) >= 5:
+                                            historical_patterns[hist_date] = hist_pattern
+                                    
+                                    # Find similar patterns
+                                    similar_patterns = find_similar_sessions(
+                                        current_pattern, 
+                                        historical_patterns, 
+                                        num_matches=ns_num_matches
+                                    )
+                                    
+                                    if similar_patterns:
+                                        # Calculate session returns
+                                        session_returns = calculate_session_returns(all_sessions)
+                                        
+                                        # Predict next session
+                                        next_session_predictions = predict_next_session(similar_patterns, session_returns)
+                                        
+                                        if next_session_predictions:
+                                            # Calculate aggregated prediction
+                                            prediction = calculate_next_session_prediction(next_session_predictions)
+                                            
+                                            if prediction:
+                                                next_session_date = current_session_date + timedelta(days=1)
+                                                
+                                                # Display prediction
+                                                pred_col1, pred_col2, pred_col3 = st.columns(3)
+                                                with pred_col1:
+                                                    st.metric("Predicted Direction", 
+                                                            "Upward" if prediction['predicted_direction'] == 'up' else "Downward",
+                                                            delta=f"{prediction['confidence_level']} Confidence ({prediction['confidence']:.0%})")
+                                                with pred_col2:
+                                                    st.metric("Expected Return", 
+                                                            f"{prediction['avg_return']:.2f}%",
+                                                            delta=f"{prediction['magnitude_level']} Magnitude")
+                                                with pred_col3:
+                                                    st.metric("Range", 
+                                                            f"High: {prediction['avg_high']:.2f}% / Low: {prediction['avg_low']:.2f}%")
+                                                
+                                                # More details
+                                                with st.expander("Prediction Details"):
+                                                    st.markdown(f"""
+                                                    **Next Session Prediction for {next_session_date}:**
+                                                    
+                                                    Based on the current session pattern and {len(similar_patterns)} similar historical patterns:
+                                                    
+                                                    - **{prediction['up_count']}** historical patterns led to UP next sessions (avg: **{prediction['avg_high']:.2f}%**)
+                                                    - **{prediction['down_count']}** historical patterns led to DOWN next sessions (avg: **{prediction['avg_low']:.2f}%**)
+                                                    - Similarity-weighted average return: **{prediction['weighted_return']:.2f}%**
+                                                    
+                                                    The backtest results suggest predictions with **{prediction['confidence_level']} confidence** and **{prediction['magnitude_level']} magnitude** 
+                                                    have historically been {
+                                                    "very accurate" if prediction['confidence_level'] == "High" else 
+                                                    "moderately accurate" if prediction['confidence_level'] == "Medium" else 
+                                                    "less reliable"}.
+                                                    
+                                                    Similar pattern dates: {', '.join([d.strftime('%Y-%m-%d') for d in [p['date'] for p in similar_patterns]])}
+                                                    """)
+                                            else:
+                                                st.warning("Could not calculate prediction from similar patterns.")
+                                        else:
+                                            st.warning("Could not find next session data for similar patterns.")
+                                    else:
+                                        st.warning("Could not find similar historical patterns for the current session.")
+                                else:
+                                    st.warning(f"Not enough historical data. Need at least {ns_num_matches} prior sessions.")
+                            else:
+                                st.warning("Not enough data points in the current session pattern.")
+                        else:
+                            time_to_cutoff = (cutoff_time - current_time).total_seconds() / 3600
+                            st.warning(f"Current session hasn't reached the prediction cutoff point yet. {time_to_cutoff:.1f} hours until prediction can be made.")
+                    else:
+                        st.warning("Could not generate meaningful next session prediction results. Try different parameters.")
+                else:
+                    st.error("Could not fetch data for the selected symbol and interval combination.")
+
+
 if __name__ == "__main__":
-    main()           
+    main()
