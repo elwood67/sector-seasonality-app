@@ -2053,7 +2053,7 @@ def main():
             bt_cutoff_hours = st.slider(
                 "Cutoff Hour:",
                 min_value=1,
-                max_value=24,
+                max_value=20,
                 value=6,
                 step=1,
                 help="Hours after session start to make prediction"
@@ -2271,7 +2271,7 @@ def main():
             ns_cutoff_hours = st.slider(
                 "Prediction Time:",
                 min_value=1,
-                max_value=20,
+                max_value=24,
                 value=12,
                 step=1,
                 help="Hours after session start to make prediction for next session"
