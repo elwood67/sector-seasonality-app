@@ -1345,12 +1345,6 @@ def main():
                                     - **{confidence_metrics['down_count']}** patterns ended negative (avg: **{confidence_metrics['avg_down']:.2f}%**)
                                     - Similarity-weighted average: **{confidence_metrics['weighted_avg']:.2f}%**
                                     
-                                    Based on backtesting, predictions with **{confidence_metrics['confidence_level']} confidence** and **{confidence_metrics['magnitude_level']} magnitude** 
-                                    have historically been {
-                                    "very accurate (75%+ win rate)" if confidence_metrics['confidence_level'] == "High" else 
-                                    "moderately accurate" if confidence_metrics['confidence_level'] == "Medium" else 
-                                    "less reliable"}.
-                                    
                                     *Use the Backtest tab to verify accuracy for this specific session time.*
                                     """)
                                     
