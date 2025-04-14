@@ -520,12 +520,15 @@ def plot_pattern_matches(sessions, symbol, current_session_date, top_matches, sh
         showgrid=True,
         gridwidth=1,
         gridcolor='rgba(128,128,128,0.2)',
-        ticktext=hour_labels,
-        tickvals=hour_labels,
+        # Remove or comment out these two lines that may be causing the problem:
+        # ticktext=hour_labels,
+        # tickvals=hour_labels,
         tickangle=45,
         zeroline=True,
         zerolinecolor='rgba(128,128,128,0.2)',
-        title_text=f"Hours from {session_name} Open (UTC {session_open_hour_utc:02d}:00)"
+        title_text=f"Hours from {session_name} Open (UTC {session_open_hour_utc:02d}:00)",
+        # Add this line to have Plotly auto-format the time axis:
+        type='category'
     )
     
     # Update y-axis
