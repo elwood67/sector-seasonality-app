@@ -138,6 +138,57 @@ def minutes_to_time_str(minutes):
     return f"{hours:02d}:{mins:02d}"
 
 # Pattern analysis functions ----------------------------------------------------------------------------------
+
+def create_composite_pattern(top_matches, max_patterns=10):
+    """
+    Create a composite (average) pattern from the top matching patterns
+    
+    Parameters:
+    - top_matches: List of match dictionaries with pattern data
+    - max_patterns: Maximum number of patterns to include in composite
+    
+    Returns:
+    - Composite pattern as a pandas Series
+    """
+    if not top_matches or len(top_matches) == 0:
+        return None
+        
+    # Limit to max_patterns
+    patterns_to_use = top_matches[:max_patterns]
+    
+    # Find all unique time points across all patterns
+    all_time_points = set()
+    for match in patterns_to_use:
+        all_time_points.update(match['pattern'].index)
+    
+    all_time_points = sorted(all_time_points)
+    
+    # Create a dictionary to store values for each time point
+    composite_data = {t: [] for t in all_time_points}
+    
+    # Collect values at each time point
+    for match in patterns_to_use:
+        pattern = match['pattern']
+        for time_point in all_time_points:
+            if time_point in pattern.index:
+                composite_data[time_point].append(pattern[time_point])
+    
+    # Calculate average for each time point (if data exists)
+    composite_values = []
+    composite_times = []
+    
+    for time_point in all_time_points:
+        values = composite_data[time_point]
+        if values:  # Only include if we have at least one value
+            composite_values.append(sum(values) / len(values))
+            composite_times.append(time_point)
+    
+    # Create a pandas Series with the composite pattern
+    import pandas as pd
+    composite_pattern = pd.Series(composite_values, index=composite_times)
+    
+    return composite_pattern
+
 def calculate_session_patterns(sessions, current_session_date=None):
     """Calculate price patterns for each session"""
     patterns = {}
@@ -425,6 +476,7 @@ def plot_pattern_matches(sessions, symbol, current_session_date, top_matches, sh
     # Colors for different patterns
     colors = {
         'current': 'rgb(255, 255, 255)',   # White
+        'composite': 'rgb(255, 215, 0)',   # Gold/Yellow for composite
         'match1': 'rgb(255, 99, 132)',     # Red
         'match2': 'rgb(66, 135, 245)',     # Blue
         'match3': 'rgb(52, 191, 73)',      # Green
@@ -436,6 +488,25 @@ def plot_pattern_matches(sessions, symbol, current_session_date, top_matches, sh
         'match9': 'rgb(255, 204, 0)',      # Gold
         'match10': 'rgb(204, 102, 255)',   # Lavender
     }
+    
+    # Create composite pattern first so it's underneath the current session
+    composite_pattern = create_composite_pattern(top_matches, max_patterns=max_patterns)
+    
+    # Add composite pattern if available
+    if composite_pattern is not None and not composite_pattern.empty:
+        # Convert pattern minutes to time strings
+        composite_times = [minutes_to_time_str(m) for m in composite_pattern.index]
+        
+        fig.add_trace(
+            go.Scatter(
+                x=composite_times,
+                y=composite_pattern.values,
+                mode='lines',
+                name="Composite Pattern",
+                line=dict(color=colors['composite'], width=4, dash='solid'),
+                opacity=0.8
+            )
+        )
     
     # Add current session price
     if not current_session.empty:
@@ -461,7 +532,7 @@ def plot_pattern_matches(sessions, symbol, current_session_date, top_matches, sh
     
     # Add top matching patterns
     for i, match in enumerate(top_matches[:max_patterns]):
-        if i < len(colors) - 1:  # Ensure we have a color for this match
+        if i < len(colors) - 2:  # Ensure we have a color for this match (accounting for current & composite)
             match_color = colors[f'match{i+1}']
             date_str = match['date'].strftime('%Y-%m-%d')
             
@@ -520,15 +591,12 @@ def plot_pattern_matches(sessions, symbol, current_session_date, top_matches, sh
         showgrid=True,
         gridwidth=1,
         gridcolor='rgba(128,128,128,0.2)',
-        # Remove or comment out these two lines that may be causing the problem:
-        # ticktext=hour_labels,
-        # tickvals=hour_labels,
+        # Using category type to fix time axis rendering issues
+        type='category',
         tickangle=45,
         zeroline=True,
         zerolinecolor='rgba(128,128,128,0.2)',
-        title_text=f"Hours from {session_name} Open (UTC {session_open_hour_utc:02d}:00)",
-        # Add this line to have Plotly auto-format the time axis:
-        type='category'
+        title_text=f"Hours from {session_name} Open (UTC {session_open_hour_utc:02d}:00)"
     )
     
     # Update y-axis
