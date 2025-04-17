@@ -2310,6 +2310,55 @@ def main():
                             if show_results:
                                 # Display the chart - either regular or historical view
                                 if show_historical:
+                                    # Get historical data up to the viewing time
+                                    current_time = datetime.now(pytz.utc)
+                                    viewing_time = current_time - timedelta(hours=hours_ago)
+                                    
+                                    # Calculate session start time
+                                    session_start = datetime.combine(current_session_date - timedelta(days=1), time(hour=session_hour))
+                                    session_start = pytz.utc.localize(session_start)
+                                    
+                                    # If viewing time is before session start, adjust to session start
+                                    if viewing_time < session_start:
+                                        viewing_time = session_start
+                                        st.warning(f"Adjusted view time to session start ({session_start.strftime('%H:%M:%S UTC')})")
+                                    
+                                    # Get only data up to the viewing time
+                                    historical_session_data = current_session[current_session.index <= viewing_time]
+                                    
+                                    if len(historical_session_data) < 12:  # Need enough points for pattern comparison
+                                        st.warning(f"Not enough data available {hours_ago} hours ago. Showing earliest available data.")
+                                        # Use all available data up to now but at least 12 points if possible
+                                        earliest_points = min(len(current_session), 12)
+                                        historical_session_data = current_session.iloc[:earliest_points]
+                                    
+                                    # Calculate historical pattern
+                                    historical_open = historical_session_data['Close'].iloc[0]
+                                    historical_pattern = ((historical_session_data['Close'] - historical_open) / historical_open) * 100
+                                    
+                                    # Calculate minutes from session start
+                                    minutes_from_start = [(ts - session_start).total_seconds() / 60 for ts in historical_session_data.index]
+                                    historical_pattern.index = minutes_from_start
+                                    
+                                    # Find similar patterns to the historical pattern
+                                    historical_patterns = calculate_session_patterns(sessions, current_session_date)
+                                    
+                                    historical_matches = find_similar_sessions(
+                                        historical_pattern,
+                                        historical_patterns,
+                                        num_matches=all_matches,
+                                        recent_bias=recent_bias
+                                    )
+                                    
+                                    # Use the historical matches for all subsequent analysis
+                                    if group_patterns and historical_matches:
+                                        top_matches = group_similar_patterns(historical_matches, threshold=similarity_threshold)
+                                        # Limit to requested number after grouping
+                                        top_matches = top_matches[:all_matches]
+                                    else:
+                                        top_matches = historical_matches[:all_matches]
+                                    
+                                    # Generate the historical view chart
                                     fig = plot_pattern_matches_historical(
                                         sessions, 
                                         symbol,
@@ -2319,7 +2368,12 @@ def main():
                                         max_patterns=display_matches,
                                         session_open_hour_utc=session_hour
                                     )
+                                    
+                                    # Add an info message about historical view
+                                    view_time = current_time - timedelta(hours=hours_ago)
+                                    st.info(f"Showing analysis as it would have appeared at {view_time.strftime('%H:%M:%S UTC')} ({hours_ago} hours ago)")
                                 else:
+                                    # Regular view - use current data
                                     fig = plot_pattern_matches(
                                         sessions, 
                                         symbol,
@@ -2329,23 +2383,22 @@ def main():
                                         max_patterns=display_matches,
                                         session_open_hour_utc=session_hour
                                     )
-                                
+
                                 # Check if we got a valid figure before trying to display it
                                 if fig:
                                     st.plotly_chart(fig, use_container_width=True)
-                                
-                                # If historical view is enabled, show an info message
-                                if show_historical:
-                                    view_time = current_time - timedelta(hours=hours_ago)
-                                    st.info(f"Showing patterns as they would have appeared at {view_time.strftime('%H:%M:%S UTC')} ({hours_ago} hours ago)")
-                                
+
+                                # The rest of the code remains the same, but now top_matches will be based on historical data
+                                # when historical view is enabled, so all the analyses will reflect the historical perspective
+
                                 # Show pattern distribution
                                 if len(top_matches) >= 3:
                                     dist_fig = analyze_pattern_distribution(top_matches)
                                     if dist_fig:
                                         st.plotly_chart(dist_fig, use_container_width=True)
-                                
+
                                 # Display confidence metrics in a nice format
+                                confidence_metrics = calculate_confidence_metrics(top_matches)
                                 if confidence_metrics:
                                     st.subheader("Pattern Prediction")
                                     
@@ -2377,7 +2430,8 @@ def main():
                                     *Use the Backtest tab to verify accuracy for this specific session time.*
                                     """)
                                     
-                                    # Show time remaining in current session
+                                    # Show time remaining in current session - this should always show current time, not historical
+                                    current_time = datetime.now(pytz.utc)
                                     session_end = datetime.combine(current_session_date, time(hour=session_hour))
                                     session_end = pytz.utc.localize(session_end)
                                     time_remaining = (session_end - current_time).total_seconds() / 3600
