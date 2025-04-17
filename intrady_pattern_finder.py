@@ -460,7 +460,7 @@ def calculate_confidence_metrics(top_matches):
         'total_count': total_count
     }
 
- # Visualization functions ----------------------------------------------------------------------------------
+# Visualization functions ----------------------------------------------------------------------------------
 def plot_pattern_matches(sessions, symbol, current_session_date, top_matches, show_scores=True, max_patterns=10, session_open_hour_utc=0):
     """Create plot showing pattern matches with current session data"""
     # Create a single plot without volume subplot
@@ -608,6 +608,223 @@ def plot_pattern_matches(sessions, symbol, current_session_date, top_matches, sh
         zeroline=True,
         zerolinecolor='rgba(255,255,255,0.4)',
         zerolinewidth=2
+    )
+    
+    return fig
+
+def plot_pattern_matches_historical(sessions, symbol, current_session_date, hours_ago, show_scores=True, max_patterns=10, session_open_hour_utc=0):
+    """
+    Create plot showing pattern matches with historical view of current session data
+    
+    Parameters:
+    - hours_ago: How many hours ago from now to show the session data
+    """
+    # Get current time
+    current_time = datetime.now(pytz.utc)
+    
+    # Get current session data
+    if current_session_date in sessions:
+        current_session = sessions[current_session_date]
+    else:
+        st.error("Current session data not found")
+        return None
+    
+    if current_session.empty:
+        st.error("No data available for current session")
+        return None
+    
+    # Calculate session start time
+    session_start = datetime.combine(current_session_date - timedelta(days=1), time(hour=session_open_hour_utc))
+    session_start = pytz.utc.localize(session_start)
+    
+    # Calculate the "viewing time" - this is the time we want to look back to
+    viewing_time = current_time - timedelta(hours=hours_ago)
+    
+    # If viewing time is before session start, adjust to session start
+    if viewing_time < session_start:
+        viewing_time = session_start
+        st.warning(f"Adjusted view time to session start ({session_start.strftime('%H:%M:%S UTC')})")
+    
+    # Get only data up to the viewing time
+    historical_session_data = current_session[current_session.index <= viewing_time]
+    
+    if len(historical_session_data) < 12:  # Need enough points for pattern comparison
+        st.warning(f"Not enough data available {hours_ago} hours ago. Showing earliest available data.")
+        # Use all available data up to now but at least 12 points if possible
+        earliest_points = min(len(current_session), 12)
+        historical_session_data = current_session.iloc[:earliest_points]
+    
+    # Calculate historical pattern
+    historical_open = historical_session_data['Close'].iloc[0]
+    historical_pattern = ((historical_session_data['Close'] - historical_open) / historical_open) * 100
+    
+    # Calculate minutes from session start
+    minutes_from_start = [(ts - session_start).total_seconds() / 60 for ts in historical_session_data.index]
+    historical_pattern.index = minutes_from_start
+    
+    # Find similar patterns to the historical pattern
+    historical_patterns = calculate_session_patterns(sessions, current_session_date)
+    
+    historical_matches = find_similar_sessions(
+        historical_pattern,
+        historical_patterns,
+        num_matches=max_patterns,
+        recent_bias=False  # No bias to keep view consistent
+    )
+    
+    # Use regular plotting function but with our historical data and matches
+    # Create a single plot without volume subplot
+    fig = go.Figure()
+    
+    # Colors for different patterns
+    colors = {
+        'current': 'rgb(255, 255, 255)',   # White
+        'composite': 'rgb(255, 215, 0)',   # Gold/Yellow for composite
+        'match1': 'rgb(255, 99, 132)',     # Red
+        'match2': 'rgb(66, 135, 245)',     # Blue
+        'match3': 'rgb(52, 191, 73)',      # Green
+        'match4': 'rgb(242, 184, 64)',     # Yellow
+        'match5': 'rgb(153, 102, 255)',    # Purple
+        'match6': 'rgb(0, 204, 204)',      # Teal
+        'match7': 'rgb(255, 51, 153)',     # Pink
+        'match8': 'rgb(102, 255, 102)',    # Light Green
+        'match9': 'rgb(255, 204, 0)',      # Gold
+        'match10': 'rgb(204, 102, 255)',   # Lavender
+    }
+    
+    # Create composite pattern first so it's underneath the current session
+    composite_pattern = create_composite_pattern(historical_matches, max_patterns=max_patterns)
+    
+    # Add composite pattern if available
+    if composite_pattern is not None and not composite_pattern.empty:
+        # Convert pattern minutes to time strings
+        composite_times = [minutes_to_time_str(m) for m in composite_pattern.index]
+        
+        fig.add_trace(
+            go.Scatter(
+                x=composite_times,
+                y=composite_pattern.values,
+                mode='lines',
+                name="Composite Pattern",
+                line=dict(color=colors['composite'], width=4, dash='solid'),
+                opacity=0.8
+            )
+        )
+    
+    # Add historical session data
+    if not historical_session_data.empty:
+        # Calculate minutes from session start for each timestamp
+        minutes_list = [(ts - session_start).total_seconds() / 60 for ts in historical_session_data.index]
+        
+        # Convert to hours:minutes format for display
+        time_strings = [minutes_to_time_str(m) for m in minutes_list]
+        
+        fig.add_trace(
+            go.Scatter(
+                x=time_strings,
+                y=historical_pattern.values,
+                mode='lines',
+                name="Current Session",
+                line=dict(color=colors['current'], width=3),
+            )
+        )
+    
+    # Add top matching patterns
+    for i, match in enumerate(historical_matches[:max_patterns]):
+        if i < len(colors) - 2:  # Ensure we have a color for this match (accounting for current & composite)
+            match_color = colors[f'match{i+1}']
+            date_str = match['date'].strftime('%Y-%m-%d')
+            
+            # Create name with or without score
+            if show_scores:
+                name = f"Match #{i+1}: {date_str} (Score: {match['similarity']:.4f})"
+            else:
+                name = f"Match #{i+1}: {date_str}"
+                
+            # Add group count if available
+            if 'count' in match and match['count'] > 1:
+                name += f" (+{match['count']-1} similar)"
+            
+            # Convert pattern minutes to time strings
+            pattern_times = [minutes_to_time_str(m) for m in match['pattern'].index]
+            
+            fig.add_trace(
+                go.Scatter(
+                    x=pattern_times,
+                    y=match['pattern'].values,
+                    mode='lines',
+                    name=name,
+                    line=dict(color=match_color, width=2),
+                )
+            )
+
+    # Get session name based on hour
+    session_name = "Custom"
+    if session_open_hour_utc == 0:
+        session_name = "Asia"
+    elif session_open_hour_utc == 13:
+        session_name = "New York"
+    elif session_open_hour_utc == 7:
+        session_name = "London"
+
+    # Update layout
+    fig.update_layout(
+        title=dict(
+            text=f'{symbol} Pattern Matches ({session_name} Session - UTC {session_open_hour_utc:02d}:00)',
+            x=0.5,
+            xanchor='center'
+        ),
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+        height=700,
+        template='plotly_dark',
+        showlegend=True,
+        margin=dict(l=50, r=50, t=50, b=50)
+    )
+
+    # Common x-axis settings - use hours from session start
+    hours = list(range(0, 24))
+    hour_labels = [f"{h:02d}:00" for h in hours]
+    
+    fig.update_xaxes(
+        showgrid=True,
+        gridwidth=1,
+        gridcolor='rgba(128,128,128,0.2)',
+        # Using category type to fix time axis rendering issues
+        type='category',
+        tickangle=45,
+        zeroline=True,
+        zerolinecolor='rgba(128,128,128,0.2)',
+        title_text=f"Hours from {session_name} Open (UTC {session_open_hour_utc:02d}:00)"
+    )
+    
+    # Update y-axis
+    fig.update_yaxes(
+        title_text="Price Change from Open (%)",
+        gridcolor='rgba(128,128,128,0.2)',
+        gridwidth=1,
+        showgrid=True,
+        zeroline=True,
+        zerolinecolor='rgba(255,255,255,0.4)',
+        zerolinewidth=2
+    )
+    
+    # Add vertical line at "viewing time"
+    hours_from_start = (viewing_time - session_start).total_seconds() / 3600
+    view_time_str = viewing_time.strftime("%H:%M UTC")
+    
+    # Add annotation about historical view
+    fig.add_annotation(
+        x=0.5,
+        y=1.05,
+        xref="paper",
+        yref="paper",
+        text=f"Historical View: Patterns as of {view_time_str} ({hours_ago} hours ago)",
+        showarrow=False,
+        font=dict(color="yellow", size=14),
+        bgcolor="rgba(0,0,0,0.7)",
+        bordercolor="yellow",
+        borderwidth=1
     )
     
     return fig
@@ -1207,7 +1424,7 @@ def plot_session_example(data, session_date, cutoff_hours, similar_patterns, sym
     
     return fig
 
- # Next Session Prediction Functions ----------------------------------------------------------------------------------
+# Next Session Prediction Functions ----------------------------------------------------------------------------------
 
 def calculate_session_returns(sessions):
     """Calculate return metrics for each session"""
@@ -1830,7 +2047,7 @@ def plot_next_session_example(data, test_date, next_date, similar_patterns_dates
         zerolinewidth=2
     )
     
-    return fig   
+    return fig
 
 # Main Streamlit application ----------------------------------------------------------------------------------
 def main():
@@ -1940,6 +2157,33 @@ def main():
             st.subheader("Confidence Settings")
             filter_by_confidence = st.checkbox("Only Show High Confidence", value=False,
                                             help="Only show signals with high confidence (>80%)")
+                                            
+            # Add Historical View section
+            st.sidebar.subheader("Historical View")
+            show_historical = st.sidebar.checkbox("Enable Historical View", value=False, 
+                                              help="View how pattern matches appeared earlier in the session")
+            
+            # Only show the rest of Historical View settings when enabled
+            hours_ago = 4  # Default value
+            if show_historical:
+                # Calculate how many hours have passed in the current session
+                current_time = datetime.now(pytz.utc)
+                current_session_date = get_session_date(current_time, session_hour)
+                session_start = datetime.combine(current_session_date - timedelta(days=1), time(hour=session_hour))
+                session_start = pytz.utc.localize(session_start)
+                
+                hours_passed = (current_time - session_start).total_seconds() / 3600
+                max_hours_ago = min(23, max(1, int(hours_passed)))
+                
+                hours_ago = st.sidebar.slider(
+                    "Hours Ago to View:",
+                    min_value=1,
+                    max_value=max_hours_ago,
+                    value=min(4, max_hours_ago),
+                    step=1,
+                    help="Show pattern matches as they appeared X hours ago",
+                    key="pf_hours_ago"
+                )
         
         # Main pattern finder logic
         try:
@@ -1998,17 +2242,36 @@ def main():
                                     show_results = False
                             
                             if show_results:
-                                # Display the chart
-                                fig = plot_pattern_matches(
-                                    sessions, 
-                                    symbol,
-                                    current_session_date,
-                                    top_matches,
-                                    show_scores=show_scores,
-                                    max_patterns=display_matches,
-                                    session_open_hour_utc=session_hour
-                                )
-                                st.plotly_chart(fig, use_container_width=True)
+                                # Display the chart - either regular or historical view
+                                if show_historical:
+                                    fig = plot_pattern_matches_historical(
+                                        sessions, 
+                                        symbol,
+                                        current_session_date,
+                                        hours_ago,
+                                        show_scores=show_scores,
+                                        max_patterns=display_matches,
+                                        session_open_hour_utc=session_hour
+                                    )
+                                else:
+                                    fig = plot_pattern_matches(
+                                        sessions, 
+                                        symbol,
+                                        current_session_date,
+                                        top_matches,
+                                        show_scores=show_scores,
+                                        max_patterns=display_matches,
+                                        session_open_hour_utc=session_hour
+                                    )
+                                
+                                # Check if we got a valid figure before trying to display it
+                                if fig:
+                                    st.plotly_chart(fig, use_container_width=True)
+                                
+                                # If historical view is enabled, show an info message
+                                if show_historical:
+                                    view_time = current_time - timedelta(hours=hours_ago)
+                                    st.info(f"Showing patterns as they would have appeared at {view_time.strftime('%H:%M:%S UTC')} ({hours_ago} hours ago)")
                                 
                                 # Show pattern distribution
                                 if len(top_matches) >= 3:
@@ -2636,7 +2899,6 @@ def main():
                         st.warning("Could not generate meaningful next session prediction results. Try different parameters.")
                 else:
                     st.error("Could not fetch data for the selected symbol and interval combination.")
-
 
 if __name__ == "__main__":
     main()
