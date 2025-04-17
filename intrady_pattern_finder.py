@@ -1769,12 +1769,12 @@ def plot_next_session_results(results_df):
         template='plotly_dark',
         plot_bgcolor='rgba(0,0,0,0)',
         paper_bgcolor='rgba(0,0,0,0)',
-        height=400
-    )
-    
-    # Apply improved hover label styling
-    time_fig.update_traces(
-        hoverlabel=dict(bgcolor="white", font_size=12, font_color="black")
+        height=400,
+        hoverlabel=dict(
+            bgcolor="white",
+            font_size=14,
+            font_color="black"
+        )
     )
     
     # Create comparison scatter plot - predicted vs actual returns
@@ -1825,12 +1825,12 @@ def plot_next_session_results(results_df):
         template='plotly_dark',
         plot_bgcolor='rgba(0,0,0,0)',
         paper_bgcolor='rgba(0,0,0,0)',
-        height=400
-    )
-    
-    # Apply improved hover label styling
-    compare_fig.update_traces(
-        hoverlabel=dict(bgcolor="white", font_size=12, font_color="black")
+        height=400,
+        hoverlabel=dict(
+            bgcolor="white",
+            font_size=14,
+            font_color="black"
+        )
     )
     
     # Create confidence level chart
@@ -1844,20 +1844,42 @@ def plot_next_session_results(results_df):
     
     conf_fig = go.Figure()
     
+    # Process data for confidence chart
+    conf_bars = []
     for i, (level, row) in enumerate(conf_accuracy.iterrows()):
         if pd.isna(level) or pd.isna(row['Accuracy']):
             continue
             
         color = 'rgba(255, 99, 132, 0.7)' if row['Accuracy'] < 0.55 else 'rgba(75, 192, 192, 0.7)'
+        count = int(row['Count'])
+        accuracy = row['Accuracy']
         
+        # Create customized hover text with HTML formatting
+        hover_text = f"<b>{level}</b><br>" + \
+                     f"<span style='color:black;'>{count} predictions<br>" + \
+                     f"{accuracy:.1%} accuracy</span>"
+        
+        conf_bars.append({
+            'x': level,
+            'y': accuracy,
+            'color': color,
+            'count': count,
+            'accuracy': accuracy,
+            'hover_text': hover_text
+        })
+    
+    # Add bars to confidence chart with custom hover text
+    for bar in conf_bars:
         conf_fig.add_trace(
             go.Bar(
-                x=[level],
-                y=[row['Accuracy']],
-                text=[f"{row['Count']} predictions<br>{row['Accuracy']:.1%} accuracy"],
+                x=[bar['x']],
+                y=[bar['y']],
+                marker_color=bar['color'],
+                name=str(bar['x']),
+                customdata=[[bar['count'], bar['accuracy']]],
+                hovertemplate=bar['hover_text'],
                 textposition='auto',
-                marker_color=color,
-                name=str(level)
+                text=f"{bar['count']} predictions<br>{bar['accuracy']:.1%} accuracy",
             )
         )
     
@@ -1869,14 +1891,13 @@ def plot_next_session_results(results_df):
         plot_bgcolor='rgba(0,0,0,0)',
         paper_bgcolor='rgba(0,0,0,0)',
         height=300,
-        yaxis=dict(range=[0, 1])
-    )
-    
-    # Apply improved hover label styling for the confidence chart
-    conf_fig.update_traces(
-        hovertemplate='<b>%{x}</b><br>' +
-                    '<span style="color: black;">%{text}</span>',
-        hoverlabel=dict(bgcolor="white", font_size=12, font_color="black")
+        yaxis=dict(range=[0, 1]),
+        hoverlabel=dict(
+            bgcolor="white",
+            font_size=14,
+            font_color="black",
+            bordercolor="black"
+        )
     )
     
     # Create magnitude level chart
@@ -1887,20 +1908,42 @@ def plot_next_session_results(results_df):
     
     mag_fig = go.Figure()
     
+    # Process data for magnitude chart
+    mag_bars = []
     for i, (level, row) in enumerate(mag_accuracy.iterrows()):
         if pd.isna(level) or pd.isna(row['Accuracy']):
             continue
             
         color = 'rgba(255, 99, 132, 0.7)' if row['Accuracy'] < 0.55 else 'rgba(75, 192, 192, 0.7)'
+        count = int(row['Count'])
+        accuracy = row['Accuracy']
         
+        # Create customized hover text with HTML formatting
+        hover_text = f"<b>{level}</b><br>" + \
+                     f"<span style='color:black;'>{count} predictions<br>" + \
+                     f"{accuracy:.1%} accuracy</span>"
+        
+        mag_bars.append({
+            'x': level,
+            'y': accuracy,
+            'color': color,
+            'count': count,
+            'accuracy': accuracy,
+            'hover_text': hover_text
+        })
+    
+    # Add bars to magnitude chart with custom hover text
+    for bar in mag_bars:
         mag_fig.add_trace(
             go.Bar(
-                x=[level],
-                y=[row['Accuracy']],
-                text=[f"{row['Count']} predictions<br>{row['Accuracy']:.1%} accuracy"],
+                x=[bar['x']],
+                y=[bar['y']],
+                marker_color=bar['color'],
+                name=str(bar['x']),
+                customdata=[[bar['count'], bar['accuracy']]],
+                hovertemplate=bar['hover_text'],
                 textposition='auto',
-                marker_color=color,
-                name=str(level)
+                text=f"{bar['count']} predictions<br>{bar['accuracy']:.1%} accuracy",
             )
         )
     
@@ -1912,14 +1955,13 @@ def plot_next_session_results(results_df):
         plot_bgcolor='rgba(0,0,0,0)',
         paper_bgcolor='rgba(0,0,0,0)',
         height=300,
-        yaxis=dict(range=[0, 1])
-    )
-    
-    # Apply improved hover label styling for the magnitude chart
-    mag_fig.update_traces(
-        hovertemplate='<b>%{x}</b><br>' +
-                    '<span style="color: black;">%{text}</span>',
-        hoverlabel=dict(bgcolor="white", font_size=12, font_color="black")
+        yaxis=dict(range=[0, 1]),
+        hoverlabel=dict(
+            bgcolor="white",
+            font_size=14,
+            font_color="black",
+            bordercolor="black"
+        )
     )
     
     return time_fig, compare_fig, conf_fig, mag_fig
