@@ -1772,6 +1772,11 @@ def plot_next_session_results(results_df):
         height=400
     )
     
+    # Apply improved hover label styling
+    time_fig.update_traces(
+        hoverlabel=dict(bgcolor="white", font_size=12, font_color="black")
+    )
+    
     # Create comparison scatter plot - predicted vs actual returns
     compare_fig = go.Figure()
     
@@ -1823,6 +1828,11 @@ def plot_next_session_results(results_df):
         height=400
     )
     
+    # Apply improved hover label styling
+    compare_fig.update_traces(
+        hoverlabel=dict(bgcolor="white", font_size=12, font_color="black")
+    )
+    
     # Create confidence level chart
     # Accuracy by confidence level
     results_df['confidence_bucket'] = pd.cut(results_df['confidence'], 
@@ -1862,6 +1872,13 @@ def plot_next_session_results(results_df):
         yaxis=dict(range=[0, 1])
     )
     
+    # Apply improved hover label styling for the confidence chart
+    conf_fig.update_traces(
+        hovertemplate='<b>%{x}</b><br>' +
+                    '<span style="color: black;">%{text}</span>',
+        hoverlabel=dict(bgcolor="white", font_size=12, font_color="black")
+    )
+    
     # Create magnitude level chart
     results_df['return_magnitude'] = results_df['magnitude_level']
     
@@ -1896,6 +1913,13 @@ def plot_next_session_results(results_df):
         paper_bgcolor='rgba(0,0,0,0)',
         height=300,
         yaxis=dict(range=[0, 1])
+    )
+    
+    # Apply improved hover label styling for the magnitude chart
+    mag_fig.update_traces(
+        hovertemplate='<b>%{x}</b><br>' +
+                    '<span style="color: black;">%{text}</span>',
+        hoverlabel=dict(bgcolor="white", font_size=12, font_color="black")
     )
     
     return time_fig, compare_fig, conf_fig, mag_fig
