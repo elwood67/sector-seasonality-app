@@ -134,11 +134,23 @@ def create_iso_calendar_view(year):
 
 def calculate_directional_consistency(data, num_years):
     """
-    Calculate the percentage of years where price moves in the same direction for each ISO week.
+    Calculate the percentage of years where price moves in the same direction for each ISO week,
+    excluding the current year.
     """
-    end_date = data.index.max()
+    # Get current year to exclude it from analysis
+    current_year = datetime.now().year
+    
+    # Filter out current year data
+    data_without_current = data[data.index.year < current_year].copy()
+    
+    # End date should be the latest date excluding current year
+    if not data_without_current.empty:
+        end_date = data_without_current.index.max()
+    else:
+        end_date = data.index.max()
+    
     start_date = end_date - pd.DateOffset(years=num_years)
-    filtered_data = data[data.index >= start_date].copy()
+    filtered_data = data_without_current[data_without_current.index >= start_date].copy()
     
     # Resample to weekly data (week ending on Sunday)
     weekly_data = filtered_data.resample('W-SUN').last()
@@ -163,8 +175,8 @@ def calculate_directional_consistency(data, num_years):
     # Dictionary to store results
     consistency_dict = {}
     
-    # Get unique weeks
-    unique_weeks = set(w for w in iso_weeks_array if w is not None)
+    # Get unique weeks (only consider weeks 1-52 for standard year)
+    unique_weeks = set(w for w in iso_weeks_array if w is not None and w <= 52)
     
     # Calculate directional consistency for each ISO week
     for week in unique_weeks:
@@ -209,9 +221,20 @@ def create_seasonality_chart(data, symbol, num_years):
     directional_consistency = calculate_directional_consistency(data, num_years)
     
     # Prepare data for chart
-    end_date = data.index.max()
+    # Get current year for separate calculation
+    current_year = datetime.now().year
+    
+    # Historical data (excluding current year)
+    historical_data = data[data.index.year < current_year].copy()
+    
+    # Use appropriate end date if historical data exists
+    if not historical_data.empty:
+        end_date = historical_data.index.max()
+    else:
+        end_date = data.index.max()
+    
     start_date = end_date - pd.DateOffset(years=num_years)
-    filtered_data = data[data.index >= start_date]
+    filtered_data = historical_data[historical_data.index >= start_date]
     
     # Resample to weekly data (week ending on Sunday)
     weekly_data = filtered_data.resample('W-SUN').last()
@@ -235,7 +258,7 @@ def create_seasonality_chart(data, symbol, num_years):
         # Create week to price dictionary for this year
         week_prices = {}
         for i, week in enumerate(year_weeks):
-            if week is not None:
+            if week is not None and week <= 52:  # Only include weeks 1-52
                 week_prices[week] = year_data[i]
         
         # Normalize for this year
@@ -259,8 +282,8 @@ def create_seasonality_chart(data, symbol, num_years):
     for week, values in normalized_data.items():
         seasonal_pattern[week] = sum(values) / len(values)
     
-    # Create x and y values for our chart (all weeks 1-53)
-    all_weeks = list(range(1, 54))
+    # Create x and y values for our chart (weeks 1-52)
+    all_weeks = list(range(1, 53))  # Only include weeks 1-52
     all_pattern_values = []
     
     for week in all_weeks:
@@ -287,6 +310,32 @@ def create_seasonality_chart(data, symbol, num_years):
         if len(x_valid) > 1:  # Need at least 2 points for interpolation
             x_nan = np.where(nan_indices)[0]
             all_pattern_np[nan_indices] = np.interp(x_nan, x_valid, y_valid)
+    
+    # Calculate current year pattern separately
+    current_year_data = data[data.index.year == current_year].copy()
+    current_year_pattern = None
+    current_year_weekly = None
+    
+    if not current_year_data.empty:
+        # Resample to weekly data
+        current_year_weekly_data = current_year_data.resample('W-SUN').last()
+        
+        # Normalize the current year data
+        min_price = current_year_weekly_data.min()
+        max_price = current_year_weekly_data.max()
+        price_range = max_price - min_price
+        
+        if price_range > 0:  # Avoid division by zero
+            # Get weeks for current year
+            current_year_weeks = get_iso_week_from_index(current_year_weekly_data.index)
+            
+            # Create normalized data for current year
+            current_year_weekly = {}
+            for i, week in enumerate(current_year_weeks):
+                if week is not None and i < len(current_year_weekly_data) and week <= 52:
+                    price = current_year_weekly_data.iloc[i]
+                    normalized_price = ((price - min_price) / price_range) * 100
+                    current_year_weekly[week] = normalized_price
     
     # Create the figure
     fig = go.Figure()
@@ -388,53 +437,26 @@ def create_seasonality_chart(data, symbol, num_years):
         ))
     
     # Add current year line
-    current_year = datetime.now().year
-    
-    # Filter data for current year
-    current_year_indices = [i for i, y in enumerate(get_year_from_index(data.index)) if y == current_year]
-    if current_year_indices:
-        current_year_data = pd.Series([data.iloc[i] for i in current_year_indices], 
-                                      index=[data.index[i] for i in current_year_indices])
+    if current_year_weekly:
+        curr_x = list(current_year_weekly.keys())
+        curr_y = list(current_year_weekly.values())
         
-        # Resample to weekly
-        current_year_weekly = current_year_data.resample('W-SUN').last()
-        current_weeks = get_iso_week_from_index(current_year_weekly.index)
-        
-        # Get min and max for normalization
-        min_val = min(current_year_weekly)
-        max_val = max(current_year_weekly)
-        value_range = max_val - min_val
-        
-        if value_range > 0:  # Avoid division by zero
-            # Normalize values to 0-100
-            normalized_values = [(val - min_val) / value_range * 100 for val in current_year_weekly]
-            
-            # Create week to normalized value mapping
-            week_values = {}
-            for i, week in enumerate(current_weeks):
-                if week is not None:
-                    week_values[week] = normalized_values[i]
-            
-            # Extract x and y for plotting
-            curr_x = list(week_values.keys())
-            curr_y = list(week_values.values())
-            
-            # Add to chart
-            fig.add_trace(go.Scatter(
-                x=curr_x,
-                y=curr_y,
-                mode='lines',
-                name=f'{current_year} Price',
-                line=dict(color='white', width=2),
-                yaxis='y2'
-            ))
+        # Add to chart
+        fig.add_trace(go.Scatter(
+            x=curr_x,
+            y=curr_y,
+            mode='lines',
+            name=f'{current_year} Price',
+            line=dict(color='white', width=2),
+            yaxis='y2'
+        ))
     
     # Add quarterly backgrounds
     quarters = [
         (1, 13, 'Q1', 'rgba(144, 238, 144, 0.3)'),
         (14, 26, 'Q2', 'rgba(255, 182, 193, 0.3)'),
         (27, 39, 'Q3', 'rgba(210, 180, 140, 0.3)'),
-        (40, 53, 'Q4', 'rgba(176, 224, 230, 0.3)')
+        (40, 52, 'Q4', 'rgba(176, 224, 230, 0.3)')
     ]
     
     for start, end, quarter, color in quarters:
@@ -498,8 +520,8 @@ def create_seasonality_chart(data, symbol, num_years):
         ),
         xaxis=dict(
             tickmode='array',
-            ticktext=[f'W{i}' for i in range(1, 54)],  # Shortened to just W1, W2, etc.
-            tickvals=list(range(1, 54)),
+            ticktext=[f'W{i}' for i in range(1, 53)],  # Shortened to just W1, W2, etc.
+            tickvals=list(range(1, 53)),
             showgrid=True,
             gridwidth=1,
             gridcolor='rgba(128, 128, 128, 0.2)',
@@ -559,7 +581,7 @@ def backtest_seasonality_strategy(data, directional_consistency, test_year, thre
     # Add signal based on seasonality
     signals = []
     for week in test_data['iso_week']:
-        if week in directional_consistency:
+        if week in directional_consistency and week <= 52:  # Only consider weeks 1-52
             consistency = directional_consistency[week]['consistency']
             direction = directional_consistency[week]['direction']
             if consistency >= threshold:
