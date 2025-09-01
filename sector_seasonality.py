@@ -42,39 +42,59 @@ def get_current_week():
     return datetime.now().isocalendar()[1]
 
 def find_seasonal_inflection_points(pattern):
-    """Find peaks and troughs in the seasonal pattern"""
+    """Find peaks and troughs in the seasonal pattern with enhanced filtering"""
     values = pattern.values
     weeks = pattern.index.values
     
+    # Use higher prominence and distance to find only major inflection points
+    # This filters out weekly noise and focuses on longer-term trends
+    min_prominence = 10  # Increased from 5
+    min_distance = 4     # Minimum 4 weeks between inflection points
+    
     # Find peaks (local maxima)
-    peaks, peak_props = find_peaks(values, prominence=5)  # Minimum prominence to avoid noise
+    peaks, peak_props = find_peaks(values, prominence=min_prominence, distance=min_distance)
     
     # Find troughs (local minima) by finding peaks in inverted data
-    troughs, trough_props = find_peaks(-values, prominence=5)
+    troughs, trough_props = find_peaks(-values, prominence=min_prominence, distance=min_distance)
     
     inflection_points = []
     
-    # Add peaks
+    # Add peaks with enhanced strength calculation
     for peak in peaks:
         if peak < len(weeks):
+            # Calculate trend strength by looking at surrounding weeks
+            start_idx = max(0, peak - 3)
+            end_idx = min(len(values), peak + 4)
+            trend_range = max(values[start_idx:end_idx]) - min(values[start_idx:end_idx])
+            
             inflection_points.append({
                 'week': weeks[peak],
                 'value': values[peak],
                 'type': 'peak',
-                'strength': peak_props['prominences'][list(peaks).index(peak)]
+                'strength': peak_props['prominences'][list(peaks).index(peak)],
+                'trend_range': trend_range
             })
     
-    # Add troughs
+    # Add troughs with enhanced strength calculation
     for trough in troughs:
         if trough < len(weeks):
+            # Calculate trend strength by looking at surrounding weeks
+            start_idx = max(0, trough - 3)
+            end_idx = min(len(values), trough + 4)
+            trend_range = max(values[start_idx:end_idx]) - min(values[start_idx:end_idx])
+            
             inflection_points.append({
                 'week': weeks[trough],
                 'value': values[trough],
                 'type': 'trough',
-                'strength': trough_props['prominences'][list(troughs).index(trough)]
+                'strength': trough_props['prominences'][list(troughs).index(trough)],
+                'trend_range': trend_range
             })
     
-    return sorted(inflection_points, key=lambda x: x['week'])
+    # Filter out weak inflection points (low trend range)
+    significant_points = [point for point in inflection_points if point['trend_range'] > 15]
+    
+    return sorted(significant_points, key=lambda x: x['week'])
 
 def calculate_deviation_from_seasonal(current_pattern, historical_pattern, current_week):
     """Calculate how much current performance deviates from historical seasonal expectation"""
@@ -140,8 +160,41 @@ def detect_momentum_shifts(current_pattern, historical_pattern, current_week):
     
     return current_momentum, historical_momentum, momentum_divergence
 
+def calculate_longer_term_trend(current_pattern, historical_pattern, current_week):
+    """Calculate longer-term trend divergence (4-8 week periods)"""
+    if current_pattern is None or len(current_pattern) < 8:
+        return None, None
+    
+    # Look at 4-week and 8-week trends
+    trends_4w = {}
+    trends_8w = {}
+    
+    for period, trends_dict in [(4, trends_4w), (8, trends_8w)]:
+        if current_week >= period:
+            # Get recent weeks for current year
+            recent_current_weeks = [w for w in current_pattern.index 
+                                  if current_week - period + 1 <= w <= current_week]
+            
+            # Get corresponding historical weeks
+            recent_historical_weeks = [w for w in historical_pattern.index 
+                                     if current_week - period + 1 <= w <= current_week]
+            
+            if len(recent_current_weeks) >= 3 and len(recent_historical_weeks) >= 3:
+                # Calculate trends
+                current_values = [current_pattern.loc[w] for w in sorted(recent_current_weeks)]
+                historical_values = [historical_pattern.loc[w] for w in sorted(recent_historical_weeks)]
+                
+                current_trend = np.polyfit(range(len(current_values)), current_values, 1)[0]
+                historical_trend = np.polyfit(range(len(historical_values)), historical_values, 1)[0]
+                
+                trends_dict['current'] = current_trend
+                trends_dict['historical'] = historical_trend
+                trends_dict['divergence'] = current_trend - historical_trend
+    
+    return trends_4w, trends_8w
+
 def analyze_trend_shifts_for_group(symbols, group_name, num_years):
-    """Analyze all three types of trend shift indicators for a group"""
+    """Enhanced trend shift analysis with longer-term focus"""
     # First get the basic seasonality data
     pattern, pattern_strength, num_symbols, current_year_pattern, correlation_leaders, weekly_directions = calculate_group_seasonality(symbols, num_years)
     
@@ -150,14 +203,14 @@ def analyze_trend_shifts_for_group(symbols, group_name, num_years):
     
     current_week = get_current_week()
     
-    # 1. Find inflection points
+    # 1. Find inflection points (now with enhanced filtering)
     inflection_points = find_seasonal_inflection_points(pattern)
     
-    # Find approaching inflection points (within 2 weeks)
+    # Find approaching inflection points with longer warning window
     approaching_inflections = []
     for point in inflection_points:
         weeks_away = point['week'] - current_week
-        if 0 <= weeks_away <= 2:  # Current week or next 2 weeks
+        if 0 <= weeks_away <= 4:  # Extended to 4 weeks for longer-term focus
             approaching_inflections.append({
                 **point,
                 'weeks_away': weeks_away
@@ -168,56 +221,74 @@ def analyze_trend_shifts_for_group(symbols, group_name, num_years):
         current_year_pattern, pattern, current_week
     )
     
-    # 3. Detect momentum shifts
+    # 3. Calculate longer-term trends
+    trends_4w, trends_8w = calculate_longer_term_trend(
+        current_year_pattern, pattern, current_week
+    )
+    
+    # 4. Enhanced momentum detection with longer periods
     current_momentum, historical_momentum, momentum_divergence = detect_momentum_shifts(
         current_year_pattern, pattern, current_week
     )
     
-    # Calculate overall trend shift score
+    # Calculate enhanced trend shift score with focus on longer-term signals
     shift_score = 0
     shift_reasons = []
     
-    # Score approaching inflection points
+    # Score approaching inflection points (adjusted weighting)
     if approaching_inflections:
         for inflection in approaching_inflections:
+            # Higher weight for stronger, more significant inflection points
+            base_score = min(25, inflection['trend_range'])  # Up to 25 points based on significance
+            
             if inflection['weeks_away'] == 0:
-                shift_score += 30  # At inflection point
-                shift_reasons.append(f"At seasonal {inflection['type']} (Week {inflection['week']})")
-            elif inflection['weeks_away'] == 1:
-                shift_score += 20  # One week away
-                shift_reasons.append(f"1 week from seasonal {inflection['type']} (Week {inflection['week']})")
+                shift_score += base_score
+                shift_reasons.append(f"At major seasonal {inflection['type']} (Week {inflection['week']})")
+            elif inflection['weeks_away'] <= 2:
+                shift_score += base_score * 0.7  # 70% of full score for 1-2 weeks
+                shift_reasons.append(f"{inflection['weeks_away']} weeks from major seasonal {inflection['type']} (Week {inflection['week']})")
             else:
-                shift_score += 10  # Two weeks away
-                shift_reasons.append(f"2 weeks from seasonal {inflection['type']} (Week {inflection['week']})")
+                shift_score += base_score * 0.4  # 40% for 3-4 weeks away
+                shift_reasons.append(f"{inflection['weeks_away']} weeks from seasonal {inflection['type']} (Week {inflection['week']})")
     
-    # Score deviation from seasonal norm
-    if current_deviation is not None and abs(current_deviation) > 15:  # Significant deviation
-        shift_score += min(25, abs(current_deviation) / 2)  # Up to 25 points
-        direction = "above" if current_deviation > 0 else "below"
-        shift_reasons.append(f"Running {abs(current_deviation):.1f}% {direction} seasonal expectation")
-        
-        # Extra points if deviation trend is accelerating
-        if deviation_trend is not None and abs(deviation_trend) > 5:
-            shift_score += 15
-            trend_direction = "accelerating away from" if (current_deviation * deviation_trend) > 0 else "correcting toward"
-            shift_reasons.append(f"Deviation {trend_direction} seasonal norm")
+    # Score longer-term trend divergences
+    if trends_8w and abs(trends_8w.get('divergence', 0)) > 3:
+        divergence_score = min(30, abs(trends_8w['divergence']) * 3)
+        shift_score += divergence_score
+        direction = "stronger" if trends_8w['divergence'] > 0 else "weaker"
+        shift_reasons.append(f"8-week trend {direction} than seasonal pattern")
     
-    # Score momentum divergence
-    if momentum_divergence is not None and abs(momentum_divergence) > 2:
-        shift_score += min(20, abs(momentum_divergence) * 5)  # Up to 20 points
-        if momentum_divergence > 0:
-            shift_reasons.append(f"Momentum stronger than seasonal expectation")
-        else:
-            shift_reasons.append(f"Momentum weaker than seasonal expectation")
+    if trends_4w and abs(trends_4w.get('divergence', 0)) > 4:
+        divergence_score = min(20, abs(trends_4w['divergence']) * 2.5)
+        shift_score += divergence_score
+        direction = "stronger" if trends_4w['divergence'] > 0 else "weaker"
+        shift_reasons.append(f"4-week trend {direction} than seasonal pattern")
+    
+    # Score persistent deviation (only if it's been consistent for multiple weeks)
+    if current_deviation is not None and abs(current_deviation) > 20:
+        # Only score if the deviation is persistent
+        if deviation_trend is not None and abs(deviation_trend) > 2:
+            shift_score += min(20, abs(current_deviation) / 3)
+            direction = "above" if current_deviation > 0 else "below"
+            persistence = "accelerating away from" if (current_deviation * deviation_trend) > 0 else "correcting toward"
+            shift_reasons.append(f"Persistent {abs(current_deviation):.1f}% {direction} seasonal norm, {persistence} trend")
+    
+    # Reduce scoring for short-term momentum unless it's very significant
+    if momentum_divergence is not None and abs(momentum_divergence) > 4:  # Higher threshold
+        shift_score += min(15, abs(momentum_divergence) * 2)
+        direction = "stronger" if momentum_divergence > 0 else "weaker"
+        shift_reasons.append(f"Short-term momentum significantly {direction} than seasonal expectation")
     
     return {
         'group_name': group_name,
-        'shift_score': min(100, shift_score),  # Cap at 100
+        'shift_score': min(100, shift_score),
         'shift_reasons': shift_reasons,
         'approaching_inflections': approaching_inflections,
         'current_deviation': current_deviation,
         'deviation_trend': deviation_trend,
         'momentum_divergence': momentum_divergence,
+        'trends_4w': trends_4w,
+        'trends_8w': trends_8w,
         'pattern': pattern,
         'current_pattern': current_year_pattern,
         'num_symbols': num_symbols
@@ -780,22 +851,69 @@ def main():
                     scan_progress.progress((i + 1) / len(groups_to_scan))
                 
                 scan_status.text(f"Scan complete! Found {len(trend_shifts)} groups with significant trend shift potential.")
+                
+                # Analyze market-wide patterns
+                market_analysis = analyze_market_wide_shifts(trend_shifts)
             
             if trend_shifts:
                 # Sort by shift score
                 trend_shifts.sort(key=lambda x: x['shift_score'], reverse=True)
                 
-                # Display results in tabs
-                tab1, tab2, tab3 = st.tabs(["🚨 High Alert (50+)", "⚠️ Moderate (25-49)", "📊 All Results"])
+                # Display market-wide analysis first if significant patterns found
+                if market_analysis and market_analysis['market_shifts']:
+                    st.markdown("## 🌊 **MARKET-WIDE SHIFT DETECTED**")
+                    st.markdown("---")
+                    
+                    for shift in market_analysis['market_shifts']:
+                        col1, col2, col3 = st.columns([2, 1, 1])
+                        
+                        with col1:
+                            shift_emoji = "📈" if shift['type'] == 'trough' else "📉"
+                            st.markdown(f"### {shift_emoji} Market-Wide Seasonal {shift['type'].title()}")
+                            st.markdown(f"**Week {shift['week']}** ({shift['weeks_away']} weeks away)")
+                            st.markdown(f"Affecting **{shift['group_count']} industries** ({shift['percentage']:.1f}% of market)")
+                            st.markdown(f"Covering **{shift['total_stocks']:,} stocks** with avg shift score of **{shift['avg_score']:.1f}**")
+                        
+                        with col2:
+                            st.markdown("**Top Industries:**")
+                            for group in shift['groups'][:5]:
+                                st.markdown(f"• {group['name'][:25]}...")
+                        
+                        with col3:
+                            st.markdown("**Risk Level:**")
+                            if shift['percentage'] >= 30:
+                                st.error("🔴 EXTREME")
+                            elif shift['percentage'] >= 20:
+                                st.warning("🟠 HIGH") 
+                            else:
+                                st.info("🟡 MODERATE")
+                    
+                    # Market sentiment overview
+                    if market_analysis['trend_consensus']:
+                        st.markdown("### Market Sentiment Analysis")
+                        consensus = market_analysis['trend_consensus']
+                        col1, col2, col3 = st.columns(3)
+                        
+                        with col1:
+                            st.metric("Bullish Trends", consensus['bullish_trends'])
+                        with col2:
+                            st.metric("Bearish Trends", consensus['bearish_trends'])  
+                        with col3:
+                            st.metric("Mixed Signals", consensus['mixed_signals'])
+                    
+                    st.markdown("---")
+                
+                # Display individual results in tabs
+                tab1, tab2, tab3, tab4 = st.tabs(["🚨 High Alert (50+)", "⚠️ Moderate (25-49)", "📊 All Results", "📈 Market Analysis"])
                 
                 with tab1:
                     high_alert = [ts for ts in trend_shifts if ts['shift_score'] >= 50]
                     if high_alert:
-                        st.markdown("### Groups with High Trend Shift Probability")
+                        st.markdown("### Individual Groups with High Trend Shift Probability")
                         for shift_data in high_alert:
                             display_trend_shift_card(shift_data)
                     else:
-                        st.info("No groups currently showing high alert trend shift signals.")
+                        st.info("No individual groups currently showing high alert trend shift signals.")
                 
                 with tab2:
                     moderate_alert = [ts for ts in trend_shifts if 25 <= ts['shift_score'] < 50]
@@ -811,9 +929,40 @@ def main():
                     for shift_data in trend_shifts:
                         display_trend_shift_card(shift_data, compact=True)
                 
-                # Summary statistics
+                with tab4:
+                    if market_analysis:
+                        st.markdown("### Detailed Market Analysis")
+                        
+                        if market_analysis['market_shifts']:
+                            st.markdown("#### Market-Wide Seasonal Inflection Points")
+                            for i, shift in enumerate(market_analysis['market_shifts'], 1):
+                                with st.expander(f"{i}. {shift['type'].title()} in Week {shift['week']} - {shift['group_count']} industries"):
+                                    st.markdown("**Affected Industries:**")
+                                    for group in shift['groups']:
+                                        st.markdown(f"• **{group['name']}**: {group['score']:.0f}/100 score, {group['num_symbols']} stocks")
+                        else:
+                            st.info("No significant market-wide patterns detected. Industries are showing individual rather than coordinated shifts.")
+                        
+                        # Additional market metrics
+                        st.markdown("#### Market Breadth Analysis")
+                        total_groups = market_analysis['total_groups_analyzed']
+                        high_alert_count = len([ts for ts in trend_shifts if ts['shift_score'] >= 50])
+                        moderate_alert_count = len([ts for ts in trend_shifts if 25 <= ts['shift_score'] < 50])
+                        
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("Market Participation", f"{(len(trend_shifts)/total_groups*100):.1f}%", 
+                                     help=f"{len(trend_shifts)} out of {total_groups} groups showing trend shift signals")
+                        with col2:
+                            st.metric("High Alert Rate", f"{(high_alert_count/total_groups*100):.1f}%")
+                        with col3:
+                            st.metric("Total Alert Rate", f"{((high_alert_count + moderate_alert_count)/total_groups*100):.1f}%")
+                    else:
+                        st.info("Market analysis data not available.")
+                
+                # Summary statistics (updated to show market analysis)
                 st.markdown("### Scanner Summary")
-                col1, col2, col3, col4 = st.columns(4)
+                col1, col2, col3, col4, col5 = st.columns(5)
                 
                 with col1:
                     st.metric("Groups Scanned", len(groups_to_scan))
@@ -826,6 +975,10 @@ def main():
                     st.metric("High Alert", high_count)
                 
                 with col4:
+                    market_shifts_count = len(market_analysis['market_shifts']) if market_analysis and market_analysis['market_shifts'] else 0
+                    st.metric("Market-Wide Shifts", market_shifts_count)
+                
+                with col5:
                     if trend_shifts:
                         avg_score = sum(ts['shift_score'] for ts in trend_shifts) / len(trend_shifts)
                         st.metric("Avg Shift Score", f"{avg_score:.1f}")
@@ -838,6 +991,106 @@ def main():
             st.warning("Please select at least one group to scan.")
 
 def display_trend_shift_card(shift_data, compact=False):
+
+def analyze_market_wide_shifts(trend_shifts):
+    """Analyze market-wide shift patterns"""
+    if not trend_shifts:
+        return None
+    
+    current_week = get_current_week()
+    
+    # Group by upcoming inflection points
+    inflection_clusters = {}
+    total_groups = len(trend_shifts)
+    
+    for shift_data in trend_shifts:
+        if shift_data.get('approaching_inflections'):
+            for inflection in shift_data['approaching_inflections']:
+                week = inflection['week']
+                inflection_type = inflection['type']
+                
+                key = f"{inflection_type}_week_{week}"
+                if key not in inflection_clusters:
+                    inflection_clusters[key] = {
+                        'week': week,
+                        'type': inflection_type,
+                        'groups': [],
+                        'weeks_away': inflection['weeks_away']
+                    }
+                
+                inflection_clusters[key]['groups'].append({
+                    'name': shift_data['group_name'],
+                    'score': shift_data['shift_score'],
+                    'num_symbols': shift_data['num_symbols']
+                })
+    
+    # Find significant market-wide patterns
+    market_shifts = []
+    
+    for cluster_key, cluster_data in inflection_clusters.items():
+        group_count = len(cluster_data['groups'])
+        percentage = (group_count / total_groups) * 100
+        
+        # Calculate weighted importance (more stocks = more market impact)
+        total_stocks = sum(group['num_symbols'] for group in cluster_data['groups'])
+        avg_score = sum(group['score'] for group in cluster_data['groups']) / group_count
+        
+        # Consider it a market-wide shift if:
+        # 1. At least 15% of groups are involved, OR
+        # 2. At least 10 groups are involved, OR  
+        # 3. High concentration of high-scoring groups
+        high_score_groups = len([g for g in cluster_data['groups'] if g['score'] >= 60])
+        
+        is_significant = (
+            percentage >= 15 or 
+            group_count >= 10 or 
+            (high_score_groups >= 5 and avg_score >= 55)
+        )
+        
+        if is_significant:
+            market_shifts.append({
+                'type': cluster_data['type'],
+                'week': cluster_data['week'],
+                'weeks_away': cluster_data['weeks_away'],
+                'group_count': group_count,
+                'percentage': percentage,
+                'total_stocks': total_stocks,
+                'avg_score': avg_score,
+                'groups': sorted(cluster_data['groups'], key=lambda x: x['score'], reverse=True)
+            })
+    
+    # Sort by significance (percentage of market involved)
+    market_shifts.sort(key=lambda x: x['percentage'], reverse=True)
+    
+    # Analyze trend direction consensus
+    trend_consensus = {
+        'bullish_trends': 0,
+        'bearish_trends': 0,
+        'mixed_signals': 0
+    }
+    
+    for shift_data in trend_shifts:
+        bullish_signals = 0
+        bearish_signals = 0
+        
+        for reason in shift_data.get('shift_reasons', []):
+            if any(word in reason.lower() for word in ['stronger', 'above', 'peak']):
+                bullish_signals += 1
+            elif any(word in reason.lower() for word in ['weaker', 'below', 'trough']):
+                bearish_signals += 1
+        
+        if bullish_signals > bearish_signals:
+            trend_consensus['bullish_trends'] += 1
+        elif bearish_signals > bullish_signals:
+            trend_consensus['bearish_trends'] += 1
+        else:
+            trend_consensus['mixed_signals'] += 1
+    
+    return {
+        'market_shifts': market_shifts,
+        'trend_consensus': trend_consensus,
+        'total_groups_analyzed': total_groups
+    }
     """Display a trend shift analysis card"""
     with st.container():
         # Create colored border based on shift score
