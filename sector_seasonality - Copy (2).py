@@ -17,6 +17,16 @@ if 'selected_industry' not in st.session_state:
     st.session_state.selected_industry = None
 if 'chart_data' not in st.session_state:
     st.session_state.chart_data = None
+if 'scan_results' not in st.session_state:
+    st.session_state.scan_results = None
+if 'scan_params' not in st.session_state:
+    st.session_state.scan_params = None
+if 'last_scan_time' not in st.session_state:
+    st.session_state.last_scan_time = None
+if 'individual_results' not in st.session_state:
+    st.session_state.individual_results = None
+if 'individual_params' not in st.session_state:
+    st.session_state.individual_params = None
 
 @st.cache_data
 def load_stock_classifications():
@@ -746,14 +756,6 @@ def create_seasonality_chart(seasonal_pattern, pattern_strength, current_year_pa
 def display_trend_shift_card(shift_data, compact=False):
     """Display a trend shift analysis card"""
     with st.container():
-        # Create colored border based on shift score
-        if shift_data['shift_score'] >= 50:
-            border_color = "red"
-        elif shift_data['shift_score'] >= 25:
-            border_color = "orange"
-        else:
-            border_color = "blue"
-        
         if not compact:
             col1, col2 = st.columns([3, 1])
             
@@ -792,6 +794,137 @@ def display_trend_shift_card(shift_data, compact=False):
                 st.markdown(f"**{shift_data['shift_score']:.0f}/100**")
         
         st.divider()
+
+def display_market_wide_alert(market_analysis):
+    """Display market-wide shift alert section"""
+    if not market_analysis or not market_analysis['market_shifts']:
+        return
+    
+    st.markdown("## 🌊 **MARKET-WIDE SHIFT DETECTED**")
+    st.markdown("---")
+    
+    for shift in market_analysis['market_shifts']:
+        col1, col2, col3 = st.columns([2, 1, 1])
+        
+        with col1:
+            shift_emoji = "📈" if shift['type'] == 'trough' else "📉"
+            st.markdown(f"### {shift_emoji} Market-Wide Seasonal {shift['type'].title()}")
+            st.markdown(f"**Week {shift['week']}** ({shift['weeks_away']} weeks away)")
+            st.markdown(f"Affecting **{shift['group_count']} industries** ({shift['percentage']:.1f}% of market)")
+            st.markdown(f"Covering **{shift['total_stocks']:,} stocks** with avg shift score of **{shift['avg_score']:.1f}**")
+        
+        with col2:
+            st.markdown("**Top Industries:**")
+            for group in shift['groups'][:5]:
+                st.markdown(f"• {group['name'][:25]}...")
+        
+        with col3:
+            st.markdown("**Risk Level:**")
+            if shift['percentage'] >= 30:
+                st.error("🔴 EXTREME")
+            elif shift['percentage'] >= 20:
+                st.warning("🟠 HIGH") 
+            else:
+                st.info("🟡 MODERATE")
+    
+    # Market sentiment overview
+    if market_analysis['trend_consensus']:
+        st.markdown("### Market Sentiment Analysis")
+        consensus = market_analysis['trend_consensus']
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric("Bullish Trends", consensus['bullish_trends'])
+        with col2:
+            st.metric("Bearish Trends", consensus['bearish_trends'])  
+        with col3:
+            st.metric("Mixed Signals", consensus['mixed_signals'])
+    
+    st.markdown("---")
+
+def display_trend_shift_tabs(trend_shifts, market_analysis):
+    """Display the tabbed results interface"""
+    tab1, tab2, tab3, tab4 = st.tabs(["🚨 High Alert (50+)", "⚠️ Moderate (25-49)", "📊 All Results", "📈 Market Analysis"])
+    
+    with tab1:
+        high_alert = [ts for ts in trend_shifts if ts['shift_score'] >= 50]
+        if high_alert:
+            st.markdown("### Individual Groups with High Trend Shift Probability")
+            for shift_data in high_alert:
+                display_trend_shift_card(shift_data)
+        else:
+            st.info("No individual groups currently showing high alert trend shift signals.")
+    
+    with tab2:
+        moderate_alert = [ts for ts in trend_shifts if 25 <= ts['shift_score'] < 50]
+        if moderate_alert:
+            st.markdown("### Groups with Moderate Trend Shift Signals")
+            for shift_data in moderate_alert:
+                display_trend_shift_card(shift_data)
+        else:
+            st.info("No groups currently showing moderate trend shift signals.")
+    
+    with tab3:
+        st.markdown("### All Detected Trend Shifts")
+        for shift_data in trend_shifts:
+            display_trend_shift_card(shift_data, compact=True)
+    
+    with tab4:
+        if market_analysis:
+            st.markdown("### Detailed Market Analysis")
+            
+            if market_analysis['market_shifts']:
+                st.markdown("#### Market-Wide Seasonal Inflection Points")
+                for i, shift in enumerate(market_analysis['market_shifts'], 1):
+                    with st.expander(f"{i}. {shift['type'].title()} in Week {shift['week']} - {shift['group_count']} industries"):
+                        st.markdown("**Affected Industries:**")
+                        for group in shift['groups']:
+                            st.markdown(f"• **{group['name']}**: {group['score']:.0f}/100 score, {group['num_symbols']} stocks")
+            else:
+                st.info("No significant market-wide patterns detected. Industries are showing individual rather than coordinated shifts.")
+            
+            # Additional market metrics
+            st.markdown("#### Market Breadth Analysis")
+            total_groups = market_analysis['total_groups_analyzed']
+            high_alert_count = len([ts for ts in trend_shifts if ts['shift_score'] >= 50])
+            moderate_alert_count = len([ts for ts in trend_shifts if 25 <= ts['shift_score'] < 50])
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Market Participation", f"{(len(trend_shifts)/total_groups*100):.1f}%", 
+                         help=f"{len(trend_shifts)} out of {total_groups} groups showing trend shift signals")
+            with col2:
+                st.metric("High Alert Rate", f"{(high_alert_count/total_groups*100):.1f}%")
+            with col3:
+                st.metric("Total Alert Rate", f"{((high_alert_count + moderate_alert_count)/total_groups*100):.1f}%")
+        else:
+            st.info("Market analysis data not available.")
+
+def display_summary_statistics(groups_scanned, trend_shifts, market_analysis):
+    """Display the scanner summary statistics"""
+    st.markdown("### Scanner Summary")
+    col1, col2, col3, col4, col5 = st.columns(5)
+    
+    with col1:
+        st.metric("Groups Scanned", groups_scanned)
+    
+    with col2:
+        st.metric("Trend Shifts Detected", len(trend_shifts))
+    
+    with col3:
+        high_count = len([ts for ts in trend_shifts if ts['shift_score'] >= 50])
+        st.metric("High Alert", high_count)
+    
+    with col4:
+        market_shifts_count = len(market_analysis['market_shifts']) if market_analysis and market_analysis['market_shifts'] else 0
+        st.metric("Market-Wide Shifts", market_shifts_count)
+    
+    with col5:
+        if trend_shifts:
+            avg_score = sum(ts['shift_score'] for ts in trend_shifts) / len(trend_shifts)
+            st.metric("Avg Shift Score", f"{avg_score:.1f}")
+        else:
+            st.metric("Avg Shift Score", "0.0")
 
 def main():
     st.title('🔄 Advanced Seasonality & Trend Shift Analysis')
@@ -875,257 +1008,430 @@ def main():
             )
     
     if analysis_mode == "Individual Analysis":
-        # Individual analysis mode
+        handle_individual_analysis(selected_group, view_type, num_years, symbols, sector_stocks, industry_stocks)
+    else:
+        handle_scanner_mode(scan_type, num_years, min_shift_score, sector_stocks, industry_stocks)
+
+def handle_individual_analysis(selected_group, view_type, num_years, symbols, sector_stocks, industry_stocks):
+    """Handle individual analysis mode with caching"""
+    
+    # Check if we can use cached results
+    current_params = {
+        'selected_group': selected_group,
+        'view_type': view_type,
+        'num_years': num_years
+    }
+    
+    use_cached = (st.session_state.individual_params == current_params and 
+                 st.session_state.individual_results is not None)
+    
+    if not use_cached:
+        # Run new analysis
         try:
-            # Get trend shift data
-            trend_shift_data = analyze_trend_shifts_for_group(symbols, selected_group, num_years)
-            
-            if trend_shift_data and trend_shift_data['pattern'] is not None:
-                # Get original seasonality data for chart
-                pattern, pattern_strength, num_symbols, current_year_pattern, correlation_leaders, weekly_directions = calculate_group_seasonality(symbols, num_years)
+            with st.spinner(f"Analyzing {selected_group}..."):
+                # Get trend shift data
+                trend_shift_data = analyze_trend_shifts_for_group(symbols, selected_group, num_years)
                 
-                # Create enhanced chart with trend shift indicators
-                fig = create_seasonality_chart(
-                    pattern, pattern_strength, current_year_pattern, 
-                    selected_group, num_years, num_symbols, weekly_directions,
-                    trend_shift_data
-                )
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # Display trend shift analysis
-                if trend_shift_data['shift_score'] > 0:
-                    st.markdown("### 🚨 Trend Shift Analysis")
+                if trend_shift_data and trend_shift_data['pattern'] is not None:
+                    # Get original seasonality data for chart
+                    pattern, pattern_strength, num_symbols, current_year_pattern, correlation_leaders, weekly_directions = calculate_group_seasonality(symbols, num_years)
                     
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric(
-                            "Trend Shift Score", 
-                            f"{trend_shift_data['shift_score']:.0f}/100",
-                            delta="High Alert" if trend_shift_data['shift_score'] > 50 else "Moderate" if trend_shift_data['shift_score'] > 25 else "Low"
-                        )
-                    
-                    with col2:
-                        if trend_shift_data['current_deviation'] is not None:
-                            st.metric(
-                                "Deviation from Seasonal",
-                                f"{trend_shift_data['current_deviation']:.1f}%",
-                                delta="Above" if trend_shift_data['current_deviation'] > 0 else "Below"
-                            )
-                    
-                    with col3:
-                        if trend_shift_data['approaching_inflections']:
-                            next_inflection = min(trend_shift_data['approaching_inflections'], key=lambda x: x['weeks_away'])
-                            st.metric(
-                                f"Next {next_inflection['type'].title()}",
-                                f"Week {next_inflection['week']}",
-                                delta=f"{next_inflection['weeks_away']} weeks away"
-                            )
-                    
-                    if trend_shift_data['shift_reasons']:
-                        st.markdown("**Key Indicators:**")
-                        for reason in trend_shift_data['shift_reasons']:
-                            st.markdown(f"• {reason}")
+                    # Store results in session state
+                    st.session_state.individual_results = {
+                        'trend_shift_data': trend_shift_data,
+                        'pattern': pattern,
+                        'pattern_strength': pattern_strength,
+                        'num_symbols': num_symbols,
+                        'current_year_pattern': current_year_pattern,
+                        'correlation_leaders': correlation_leaders,
+                        'weekly_directions': weekly_directions
+                    }
+                    st.session_state.individual_params = current_params
                 else:
-                    st.info("No significant trend shift indicators detected at this time.")
-                
-                # Original sidebar statistics
-                st.sidebar.markdown(f"### Group Statistics")
-                st.sidebar.markdown(f"Number of stocks analyzed: {num_symbols}")
-                
-                # Display correlation leaders
-                if correlation_leaders:
-                    st.sidebar.markdown("### Top Pattern Followers")
-                    num_to_show = min(10, len(correlation_leaders))
+                    st.session_state.individual_results = None
                     
-                    for i, (symbol, corr) in enumerate(correlation_leaders[:num_to_show], 1):
-                        correlation_pct = corr * 100
-                        st.sidebar.markdown(f"{i}. {symbol}: {correlation_pct:.1f}%")
-                
-            else:
-                st.error("No valid data available for the selected group and time period.")
-                
         except Exception as e:
             st.error(f"An error occurred: {str(e)}")
-            st.error("Please try another selection or check your data.")
+            st.session_state.individual_results = None
     
-    else:
-        # Trend Shift Scanner Mode
-        st.markdown("### 🔍 Trend Shift Scanner Results")
+    # Display results (cached or new)
+    if st.session_state.individual_results:
+        results = st.session_state.individual_results
         
-        # Determine which groups to scan
-        if scan_type == "All Industries":
-            groups_to_scan = [(name, symbols, "Industry") for name, symbols in industry_stocks.items()]
-        elif scan_type == "All Sectors":
-            groups_to_scan = [(name, symbols, "Sector") for name, symbols in sector_stocks.items()]
-        else:
-            # Custom selection
-            groups_to_scan = []
-            if 'selected_sectors' in locals():
-                for sector in selected_sectors:
-                    groups_to_scan.append((sector, sector_stocks[sector], "Sector"))
-            if 'selected_industries' in locals():
-                for industry in selected_industries:
-                    groups_to_scan.append((industry, industry_stocks[industry], "Industry"))
+        # Show cache status
+        if use_cached:
+            st.info("📋 Showing cached results. Parameters unchanged since last analysis.")
         
-        if groups_to_scan:
-            # Run the trend shift analysis on all selected groups
-            with st.spinner(f'Scanning {len(groups_to_scan)} groups for trend shifts...'):
-                trend_shifts = []
-                scan_progress = st.progress(0)
-                scan_status = st.empty()
-                
-                for i, (group_name, symbols, group_type) in enumerate(groups_to_scan):
-                    scan_status.text(f"Analyzing {group_name} ({i+1}/{len(groups_to_scan)})")
-                    
-                    try:
-                        shift_data = analyze_trend_shifts_for_group(symbols, group_name, num_years)
-                        if shift_data and shift_data['shift_score'] >= min_shift_score:
-                            shift_data['group_type'] = group_type
-                            trend_shifts.append(shift_data)
-                    except Exception as e:
-                        continue
-                    
-                    scan_progress.progress((i + 1) / len(groups_to_scan))
-                
-                scan_status.text(f"Scan complete! Found {len(trend_shifts)} groups with significant trend shift potential.")
-                
-                # Analyze market-wide patterns
-                market_analysis = analyze_market_wide_shifts(trend_shifts)
+        # Create enhanced chart with trend shift indicators
+        fig = create_seasonality_chart(
+            results['pattern'], results['pattern_strength'], results['current_year_pattern'], 
+            selected_group, num_years, results['num_symbols'], results['weekly_directions'],
+            results['trend_shift_data']
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Display trend shift analysis
+        if results['trend_shift_data']['shift_score'] > 0:
+            st.markdown("### 🚨 Trend Shift Analysis")
             
-            if trend_shifts:
-                # Sort by shift score
-                trend_shifts.sort(key=lambda x: x['shift_score'], reverse=True)
-                
-                # Display market-wide analysis first if significant patterns found
-                if market_analysis and market_analysis['market_shifts']:
-                    st.markdown("## 🌊 **MARKET-WIDE SHIFT DETECTED**")
-                    st.markdown("---")
-                    
-                    for shift in market_analysis['market_shifts']:
-                        col1, col2, col3 = st.columns([2, 1, 1])
-                        
-                        with col1:
-                            shift_emoji = "📈" if shift['type'] == 'trough' else "📉"
-                            st.markdown(f"### {shift_emoji} Market-Wide Seasonal {shift['type'].title()}")
-                            st.markdown(f"**Week {shift['week']}** ({shift['weeks_away']} weeks away)")
-                            st.markdown(f"Affecting **{shift['group_count']} industries** ({shift['percentage']:.1f}% of market)")
-                            st.markdown(f"Covering **{shift['total_stocks']:,} stocks** with avg shift score of **{shift['avg_score']:.1f}**")
-                        
-                        with col2:
-                            st.markdown("**Top Industries:**")
-                            for group in shift['groups'][:5]:
-                                st.markdown(f"• {group['name'][:25]}...")
-                        
-                        with col3:
-                            st.markdown("**Risk Level:**")
-                            if shift['percentage'] >= 30:
-                                st.error("🔴 EXTREME")
-                            elif shift['percentage'] >= 20:
-                                st.warning("🟠 HIGH") 
-                            else:
-                                st.info("🟡 MODERATE")
-                    
-                    # Market sentiment overview
-                    if market_analysis['trend_consensus']:
-                        st.markdown("### Market Sentiment Analysis")
-                        consensus = market_analysis['trend_consensus']
-                        col1, col2, col3 = st.columns(3)
-                        
-                        with col1:
-                            st.metric("Bullish Trends", consensus['bullish_trends'])
-                        with col2:
-                            st.metric("Bearish Trends", consensus['bearish_trends'])  
-                        with col3:
-                            st.metric("Mixed Signals", consensus['mixed_signals'])
-                    
-                    st.markdown("---")
-                
-                # Display individual results in tabs
-                tab1, tab2, tab3, tab4 = st.tabs(["🚨 High Alert (50+)", "⚠️ Moderate (25-49)", "📊 All Results", "📈 Market Analysis"])
-                
-                with tab1:
-                    high_alert = [ts for ts in trend_shifts if ts['shift_score'] >= 50]
-                    if high_alert:
-                        st.markdown("### Individual Groups with High Trend Shift Probability")
-                        for shift_data in high_alert:
-                            display_trend_shift_card(shift_data)
-                    else:
-                        st.info("No individual groups currently showing high alert trend shift signals.")
-                
-                with tab2:
-                    moderate_alert = [ts for ts in trend_shifts if 25 <= ts['shift_score'] < 50]
-                    if moderate_alert:
-                        st.markdown("### Groups with Moderate Trend Shift Signals")
-                        for shift_data in moderate_alert:
-                            display_trend_shift_card(shift_data)
-                    else:
-                        st.info("No groups currently showing moderate trend shift signals.")
-                
-                with tab3:
-                    st.markdown("### All Detected Trend Shifts")
-                    for shift_data in trend_shifts:
-                        display_trend_shift_card(shift_data, compact=True)
-                
-                with tab4:
-                    if market_analysis:
-                        st.markdown("### Detailed Market Analysis")
-                        
-                        if market_analysis['market_shifts']:
-                            st.markdown("#### Market-Wide Seasonal Inflection Points")
-                            for i, shift in enumerate(market_analysis['market_shifts'], 1):
-                                with st.expander(f"{i}. {shift['type'].title()} in Week {shift['week']} - {shift['group_count']} industries"):
-                                    st.markdown("**Affected Industries:**")
-                                    for group in shift['groups']:
-                                        st.markdown(f"• **{group['name']}**: {group['score']:.0f}/100 score, {group['num_symbols']} stocks")
-                        else:
-                            st.info("No significant market-wide patterns detected. Industries are showing individual rather than coordinated shifts.")
-                        
-                        # Additional market metrics
-                        st.markdown("#### Market Breadth Analysis")
-                        total_groups = market_analysis['total_groups_analyzed']
-                        high_alert_count = len([ts for ts in trend_shifts if ts['shift_score'] >= 50])
-                        moderate_alert_count = len([ts for ts in trend_shifts if 25 <= ts['shift_score'] < 50])
-                        
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            st.metric("Market Participation", f"{(len(trend_shifts)/total_groups*100):.1f}%", 
-                                     help=f"{len(trend_shifts)} out of {total_groups} groups showing trend shift signals")
-                        with col2:
-                            st.metric("High Alert Rate", f"{(high_alert_count/total_groups*100):.1f}%")
-                        with col3:
-                            st.metric("Total Alert Rate", f"{((high_alert_count + moderate_alert_count)/total_groups*100):.1f}%")
-                    else:
-                        st.info("Market analysis data not available.")
-                
-                # Summary statistics
-                st.markdown("### Scanner Summary")
-                col1, col2, col3, col4, col5 = st.columns(5)
-                
-                with col1:
-                    st.metric("Groups Scanned", len(groups_to_scan))
-                
-                with col2:
-                    st.metric("Trend Shifts Detected", len(trend_shifts))
-                
-                with col3:
-                    high_count = len([ts for ts in trend_shifts if ts['shift_score'] >= 50])
-                    st.metric("High Alert", high_count)
-                
-                with col4:
-                    market_shifts_count = len(market_analysis['market_shifts']) if market_analysis and market_analysis['market_shifts'] else 0
-                    st.metric("Market-Wide Shifts", market_shifts_count)
-                
-                with col5:
-                    if trend_shifts:
-                        avg_score = sum(ts['shift_score'] for ts in trend_shifts) / len(trend_shifts)
-                        st.metric("Avg Shift Score", f"{avg_score:.1f}")
-                    else:
-                        st.metric("Avg Shift Score", "0.0")
-                
-            else:
-                st.info(f"No groups found with trend shift scores above {min_shift_score}. Try lowering the minimum threshold or selecting different groups.")
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric(
+                    "Trend Shift Score", 
+                    f"{results['trend_shift_data']['shift_score']:.0f}/100",
+                    delta="High Alert" if results['trend_shift_data']['shift_score'] > 50 else "Moderate" if results['trend_shift_data']['shift_score'] > 25 else "Low"
+                )
+            
+            with col2:
+                if results['trend_shift_data']['current_deviation'] is not None:
+                    st.metric(
+                        "Deviation from Seasonal",
+                        f"{results['trend_shift_data']['current_deviation']:.1f}%",
+                        delta="Above" if results['trend_shift_data']['current_deviation'] > 0 else "Below"
+                    )
+            
+            with col3:
+                if results['trend_shift_data']['approaching_inflections']:
+                    next_inflection = min(results['trend_shift_data']['approaching_inflections'], key=lambda x: x['weeks_away'])
+                    st.metric(
+                        f"Next {next_inflection['type'].title()}",
+                        f"Week {next_inflection['week']}",
+                        delta=f"{next_inflection['weeks_away']} weeks away"
+                    )
+            
+            if results['trend_shift_data']['shift_reasons']:
+                st.markdown("**Key Indicators:**")
+                for reason in results['trend_shift_data']['shift_reasons']:
+                    st.markdown(f"• {reason}")
         else:
-            st.warning("Please select at least one group to scan.")
+            st.info("No significant trend shift indicators detected at this time.")
+        
+        # Sidebar statistics
+        display_individual_sidebar_stats(results)
+        
+    else:
+        st.error("No valid data available for the selected group and time period.")
+
+def display_individual_sidebar_stats(results):
+    """Display sidebar statistics for individual analysis"""
+    st.sidebar.markdown(f"### Group Statistics")
+    st.sidebar.markdown(f"Number of stocks analyzed: {results['num_symbols']}")
+    
+    # Display correlation leaders
+    if results['correlation_leaders']:
+        st.sidebar.markdown("### Top Pattern Followers")
+        num_to_show = min(10, len(results['correlation_leaders']))
+        
+        for i, (symbol, corr) in enumerate(results['correlation_leaders'][:num_to_show], 1):
+            correlation_pct = corr * 100
+            st.sidebar.markdown(f"{i}. {symbol}: {correlation_pct:.1f}%")
+
+def handle_scanner_mode(scan_type, num_years, min_shift_score, sector_stocks, industry_stocks):
+    """Handle trend shift scanner mode with caching"""
+    
+    st.markdown("### 🔍 Trend Shift Scanner Results")
+    
+    # Determine which groups to scan
+    groups_to_scan = get_groups_to_scan(scan_type, sector_stocks, industry_stocks)
+    
+    # Check if we can use cached scan results
+    current_scan_params = {
+        'scan_type': scan_type,
+        'groups_to_scan': [g[0] for g in groups_to_scan],  # Just group names for comparison
+        'num_years': num_years,
+        'min_shift_score': min_shift_score
+    }
+    
+    use_cached_scan = (st.session_state.scan_params == current_scan_params and 
+                      st.session_state.scan_results is not None and
+                      st.session_state.last_scan_time is not None)
+    
+    # Add manual refresh button
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        if use_cached_scan:
+            scan_time = st.session_state.last_scan_time
+            st.info(f"📋 Showing cached scan results from {scan_time.strftime('%H:%M:%S')}. Parameters unchanged since last scan.")
+    with col2:
+        if st.button("🔄 Refresh Scan", help="Force a new scan even with cached results"):
+            use_cached_scan = False
+            st.session_state.scan_results = None
+    
+    if groups_to_scan:
+        if not use_cached_scan:
+            # Run new scan
+            run_trend_shift_scan(groups_to_scan, num_years, min_shift_score, current_scan_params)
+        
+        # Display results (cached or new)
+        if st.session_state.scan_results:
+            display_scan_results()
+        else:
+            st.warning("No scan results available. Please run a scan.")
+    else:
+        st.warning("Please select at least one group to scan.")
+
+def get_groups_to_scan(scan_type, sector_stocks, industry_stocks):
+    """Get the list of groups to scan based on scan type"""
+    if scan_type == "All Industries":
+        return [(name, symbols, "Industry") for name, symbols in industry_stocks.items()]
+    elif scan_type == "All Sectors":
+        return [(name, symbols, "Sector") for name, symbols in sector_stocks.items()]
+    else:
+        # Custom selection
+        groups_to_scan = []
+        # Note: selected_sectors and selected_industries would be defined in the sidebar
+        # For now, return empty list for custom selection
+        return groups_to_scan
+
+def run_trend_shift_scan(groups_to_scan, num_years, min_shift_score, current_scan_params):
+    """Run the trend shift scan and store results"""
+    with st.spinner(f'Scanning {len(groups_to_scan)} groups for trend shifts...'):
+        trend_shifts = []
+        scan_progress = st.progress(0)
+        scan_status = st.empty()
+        
+        for i, (group_name, symbols, group_type) in enumerate(groups_to_scan):
+            scan_status.text(f"Analyzing {group_name} ({i+1}/{len(groups_to_scan)})")
+            
+            try:
+                shift_data = analyze_trend_shifts_for_group(symbols, group_name, num_years)
+                if shift_data and shift_data['shift_score'] >= min_shift_score:
+                    shift_data['group_type'] = group_type
+                    trend_shifts.append(shift_data)
+            except Exception as e:
+                continue
+            
+            scan_progress.progress((i + 1) / len(groups_to_scan))
+        
+        scan_status.text(f"Scan complete! Found {len(trend_shifts)} groups with significant trend shift potential.")
+        
+        # Analyze market-wide patterns
+        market_analysis = analyze_market_wide_shifts(trend_shifts)
+        
+        # Store results in session state
+        st.session_state.scan_results = {
+            'trend_shifts': trend_shifts,
+            'market_analysis': market_analysis,
+            'groups_scanned': len(groups_to_scan)
+        }
+        st.session_state.scan_params = current_scan_params
+        st.session_state.last_scan_time = datetime.now()
+
+def display_scan_results():
+    """Display the scan results with all tabs and analysis"""
+    results = st.session_state.scan_results
+    trend_shifts = results['trend_shifts']
+    market_analysis = results['market_analysis']
+    groups_scanned = results['groups_scanned']
+    
+    if trend_shifts:
+        # Sort by shift score
+        trend_shifts.sort(key=lambda x: x['shift_score'], reverse=True)
+        
+        # Display market-wide analysis first if significant patterns found
+        if market_analysis and market_analysis['market_shifts']:
+            display_market_wide_alert(market_analysis)
+        
+        # Display individual results in tabs
+        display_trend_shift_tabs(trend_shifts, market_analysis)
+        
+        # Summary statistics
+        display_summary_statistics(groups_scanned, trend_shifts, market_analysis)
+        
+    else:
+        min_shift_score = st.session_state.scan_params.get('min_shift_score', 25)
+        st.info(f"No groups found with trend shift scores above {min_shift_score}. Try lowering the minimum threshold or selecting different groups.")
+
+def handle_custom_selection_scanner(sector_stocks, industry_stocks, num_years, min_shift_score):
+    """Handle custom selection scanner mode"""
+    st.markdown("### 🔍 Custom Selection Scanner")
+    
+    # Custom selection interface
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("#### Select Sectors")
+        selected_sectors = st.multiselect(
+            "Choose sectors to analyze:",
+            list(sector_stocks.keys()),
+            help="Select one or more sectors for analysis"
+        )
+    
+    with col2:
+        st.markdown("#### Select Industries")  
+        selected_industries = st.multiselect(
+            "Choose industries to analyze:",
+            list(industry_stocks.keys()),
+            help="Select one or more industries for analysis"
+        )
+    
+    # Build groups to scan
+    groups_to_scan = []
+    for sector in selected_sectors:
+        groups_to_scan.append((sector, sector_stocks[sector], "Sector"))
+    for industry in selected_industries:
+        groups_to_scan.append((industry, industry_stocks[industry], "Industry"))
+    
+    if groups_to_scan:
+        st.info(f"Ready to scan {len(groups_to_scan)} selected groups")
+        
+        # Check for cached results
+        current_scan_params = {
+            'scan_type': 'Custom Selection',
+            'groups_to_scan': [g[0] for g in groups_to_scan],
+            'num_years': num_years,
+            'min_shift_score': min_shift_score
+        }
+        
+        use_cached_scan = (st.session_state.scan_params == current_scan_params and 
+                          st.session_state.scan_results is not None)
+        
+        if use_cached_scan:
+            st.success("📋 Using cached results for your selection")
+            display_scan_results()
+        else:
+            if st.button("🚀 Start Custom Scan"):
+                run_trend_shift_scan(groups_to_scan, num_years, min_shift_score, current_scan_params)
+                st.rerun()
+    else:
+        st.warning("Please select at least one sector or industry to scan.")
+
+def display_app_info():
+    """Display app information and instructions"""
+    with st.expander("ℹ️ How to Use This App"):
+        st.markdown("""
+        ### 🔄 Advanced Seasonality & Trend Shift Analysis
+        
+        This app analyzes seasonal patterns and detects potential trend shifts in market sectors and industries.
+        
+        **Two Analysis Modes:**
+        
+        **1. Individual Analysis**
+        - Analyze a specific sector or industry
+        - View detailed seasonal patterns and current trend shift indicators
+        - See correlation leaders and pattern followers
+        
+        **2. Trend Shift Scanner** 
+        - Scan all industries, all sectors, or custom selection
+        - Detect market-wide seasonal shift patterns
+        - Get alerts when multiple groups approach similar inflection points
+        
+        **Key Features:**
+        - 🎯 **Longer-term Focus**: Filters out noise, focuses on 4+ week trends
+        - 🌊 **Market-wide Detection**: Alerts when 15%+ of groups show coordinated shifts
+        - 💾 **Smart Caching**: Results persist when you switch tabs or adjust settings
+        - 📊 **Enhanced Charts**: Visual indicators for approaching seasonal turning points
+        
+        **Trend Shift Scoring:**
+        - **50+ Points**: High Alert - Major seasonal shifts likely
+        - **25-49 Points**: Moderate - Some shift indicators present  
+        - **<25 Points**: Low - Limited shift signals detected
+        """)
+
+# Enhanced main function that includes all modes
+def main_enhanced():
+    st.title('🔄 Advanced Seasonality & Trend Shift Analysis')
+    
+    # Display app info
+    display_app_info()
+    
+    # Load classifications
+    try:
+        sector_stocks, industry_stocks = load_stock_classifications()
+    except Exception as e:
+        st.error(f"Error loading stock classifications: {str(e)}")
+        st.error("Please make sure 'stock_sectors.csv' file is available.")
+        return
+    
+    # Sidebar controls
+    with st.sidebar:
+        st.markdown("## 🎛️ Analysis Controls")
+        
+        analysis_mode = st.radio(
+            "Select Analysis Mode",
+            ["Individual Analysis", "Trend Shift Scanner"],
+            help="Choose between analyzing a single group or scanning multiple groups"
+        )
+        
+        st.markdown("---")
+        
+        if analysis_mode == "Individual Analysis":
+            st.markdown("### 📊 Individual Analysis Settings")
+            
+            view_type = st.radio(
+                "Analysis Type",
+                ["Sector", "Industry"]
+            )
+            
+            if view_type == "Sector":
+                selected_group = st.selectbox(
+                    "Select Sector",
+                    list(sector_stocks.keys()),
+                    help="Choose a sector to analyze"
+                )
+                symbols = sector_stocks[selected_group]
+            else:
+                selected_group = st.selectbox(
+                    "Select Industry", 
+                    list(industry_stocks.keys()),
+                    help="Choose an industry to analyze"
+                )
+                symbols = industry_stocks[selected_group]
+            
+            # Years slider
+            num_years = st.slider(
+                'Years of historical data:', 
+                min_value=5,
+                max_value=25,
+                value=15,
+                help="More years = more reliable patterns, but less recent relevance"
+            )
+            
+            # Quick stats
+            st.markdown(f"**Selected:** {selected_group}")
+            st.markdown(f"**Stocks:** {len(symbols)}")
+            
+        else:
+            st.markdown("### 🔍 Scanner Settings")
+            
+            scan_type = st.radio(
+                "Scan Type",
+                ["All Industries", "All Sectors", "Custom Selection"],
+                help="Choose scope of analysis"
+            )
+            
+            num_years = st.slider(
+                'Years of historical data:', 
+                min_value=5,
+                max_value=25,
+                value=15,
+                help="Years of historical data for pattern analysis"
+            )
+            
+            min_shift_score = st.slider(
+                'Minimum shift score:',
+                min_value=10,
+                max_value=80,
+                value=25,
+                help="Only show groups above this threshold"
+            )
+            
+            # Scan scope info
+            if scan_type == "All Industries":
+                st.markdown(f"**Scope:** {len(industry_stocks)} industries")
+            elif scan_type == "All Sectors": 
+                st.markdown(f"**Scope:** {len(sector_stocks)} sectors")
+            else:
+                st.markdown("**Scope:** Custom selection")
+    
+    # Main content area
+    if analysis_mode == "Individual Analysis":
+        handle_individual_analysis(selected_group, view_type, num_years, symbols, sector_stocks, industry_stocks)
+    else:
+        if scan_type == "Custom Selection":
+            handle_custom_selection_scanner(sector_stocks, industry_stocks, num_years, min_shift_score)
+        else:
+            handle_scanner_mode(scan_type, num_years, min_shift_score, sector_stocks, industry_stocks)
 
 if __name__ == "__main__":
-    main()
+    main_enhanced()            
