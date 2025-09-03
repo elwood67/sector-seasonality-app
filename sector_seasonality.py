@@ -839,15 +839,15 @@ def analyze_trend_shifts_for_group(symbols, group_name, num_years):
     }
 
 def analyze_market_wide_shifts(trend_shifts):
-    """Analyze market-wide shift patterns"""
+    """Analyze market-wide shift patterns with enhanced sensitivity"""
     if not trend_shifts:
         return None
     
     current_week = get_current_week()
+    total_groups = len(trend_shifts)
     
     # Group by upcoming inflection points
     inflection_clusters = {}
-    total_groups = len(trend_shifts)
     
     for shift_data in trend_shifts:
         if shift_data.get('approaching_inflections'):
@@ -870,7 +870,7 @@ def analyze_market_wide_shifts(trend_shifts):
                     'num_symbols': shift_data['num_symbols']
                 })
     
-    # Find significant market-wide patterns
+    # Find significant market-wide patterns (ADJUSTED THRESHOLDS)
     market_shifts = []
     
     for cluster_key, cluster_data in inflection_clusters.items():
@@ -881,13 +881,13 @@ def analyze_market_wide_shifts(trend_shifts):
         total_stocks = sum(group['num_symbols'] for group in cluster_data['groups'])
         avg_score = sum(group['score'] for group in cluster_data['groups']) / group_count
         
-        # Consider it a market-wide shift if significant
+        # LOWERED THRESHOLDS for market-wide shift detection:
         high_score_groups = len([g for g in cluster_data['groups'] if g['score'] >= 60])
         
         is_significant = (
-            percentage >= 15 or 
-            group_count >= 10 or 
-            (high_score_groups >= 5 and avg_score >= 55)
+            percentage >= 8 or          # Lowered from 15% to 8%
+            group_count >= 5 or         # Lowered from 10 to 5 groups
+            (high_score_groups >= 3 and avg_score >= 50)  # Lowered thresholds
         )
         
         if is_significant:
@@ -901,6 +901,9 @@ def analyze_market_wide_shifts(trend_shifts):
                 'avg_score': avg_score,
                 'groups': sorted(cluster_data['groups'], key=lambda x: x['score'], reverse=True)
             })
+    
+    # NEW: Detect broad trend patterns (not just inflection points)
+    trend_pattern_analysis = analyze_broad_trend_patterns(trend_shifts)
     
     # Sort by significance
     market_shifts.sort(key=lambda x: x['percentage'], reverse=True)
@@ -932,7 +935,72 @@ def analyze_market_wide_shifts(trend_shifts):
     return {
         'market_shifts': market_shifts,
         'trend_consensus': trend_consensus,
-        'total_groups_analyzed': total_groups
+        'total_groups_analyzed': total_groups,
+        'broad_patterns': trend_pattern_analysis  # NEW
+    }
+
+def analyze_broad_trend_patterns(trend_shifts):
+    """NEW: Analyze broad market trend patterns beyond just inflection points"""
+    if not trend_shifts:
+        return None
+    
+    total_groups = len(trend_shifts)
+    
+    # Count common trend patterns
+    pattern_counts = {
+        'above_seasonal_norm': 0,
+        'below_seasonal_norm': 0,
+        'stronger_momentum': 0,
+        'weaker_momentum': 0,
+        'accelerating_away': 0,
+        'correcting_toward': 0,
+        '8_week_stronger': 0,
+        '4_week_stronger': 0
+    }
+    
+    for shift_data in trend_shifts:
+        reasons = shift_data.get('shift_reasons', [])
+        
+        for reason in reasons:
+            reason_lower = reason.lower()
+            if 'above seasonal norm' in reason_lower:
+                pattern_counts['above_seasonal_norm'] += 1
+            elif 'below seasonal norm' in reason_lower:
+                pattern_counts['below_seasonal_norm'] += 1
+                
+            if 'accelerating away from' in reason_lower:
+                pattern_counts['accelerating_away'] += 1
+            elif 'correcting toward' in reason_lower:
+                pattern_counts['correcting_toward'] += 1
+                
+            if '8-week trend stronger' in reason_lower:
+                pattern_counts['8_week_stronger'] += 1
+            elif '4-week trend stronger' in reason_lower:
+                pattern_counts['4_week_stronger'] += 1
+                
+            if 'momentum significantly stronger' in reason_lower:
+                pattern_counts['stronger_momentum'] += 1
+            elif 'momentum significantly weaker' in reason_lower:
+                pattern_counts['weaker_momentum'] += 1
+    
+    # Calculate percentages and identify dominant patterns
+    broad_patterns = []
+    
+    for pattern, count in pattern_counts.items():
+        percentage = (count / total_groups) * 100
+        if percentage >= 20:  # If 20%+ of groups show this pattern
+            broad_patterns.append({
+                'pattern': pattern.replace('_', ' ').title(),
+                'count': count,
+                'percentage': percentage
+            })
+    
+    # Sort by prevalence
+    broad_patterns.sort(key=lambda x: x['percentage'], reverse=True)
+    
+    return {
+        'patterns': broad_patterns,
+        'total_analyzed': total_groups
     }
 
 def create_seasonality_chart(seasonal_pattern, pattern_strength, current_year_pattern, group_name, num_years, num_symbols, weekly_directions, trend_shift_data=None):
@@ -1216,36 +1284,93 @@ def display_trend_shift_card(shift_data, compact=False):
         st.divider()
 
 def display_market_wide_alert(market_analysis):
-    """Display market-wide shift alert section"""
-    if not market_analysis or not market_analysis['market_shifts']:
+    """Display market-wide shift alert section with enhanced pattern detection"""
+    # Check for both inflection-based shifts and broad patterns
+    has_inflection_shifts = market_analysis and market_analysis['market_shifts']
+    has_broad_patterns = market_analysis and market_analysis.get('broad_patterns') and market_analysis['broad_patterns']['patterns']
+    
+    if not has_inflection_shifts and not has_broad_patterns:
         return
     
-    st.markdown("## 🌊 **MARKET-WIDE SHIFT DETECTED**")
+    st.markdown("## 🌊 **MARKET-WIDE PATTERNS DETECTED**")
     st.markdown("---")
     
-    for shift in market_analysis['market_shifts']:
-        col1, col2, col3 = st.columns([2, 1, 1])
+    # Display inflection point clusters if they exist
+    if has_inflection_shifts:
+        st.markdown("### 📍 Coordinated Seasonal Inflection Points")
+        for shift in market_analysis['market_shifts']:
+            col1, col2, col3 = st.columns([2, 1, 1])
+            
+            with col1:
+                shift_emoji = "📈" if shift['type'] == 'trough' else "📉"
+                st.markdown(f"#### {shift_emoji} Market-Wide Seasonal {shift['type'].title()}")
+                st.markdown(f"**Week {shift['week']}** ({shift['weeks_away']} weeks away)")
+                st.markdown(f"Affecting **{shift['group_count']} industries** ({shift['percentage']:.1f}% of analyzed groups)")
+                st.markdown(f"Covering **{shift['total_stocks']:,} stocks** with avg shift score of **{shift['avg_score']:.1f}**")
+            
+            with col2:
+                st.markdown("**Top Industries:**")
+                for group in shift['groups'][:5]:
+                    st.markdown(f"• {group['name'][:25]}...")
+            
+            with col3:
+                st.markdown("**Risk Level:**")
+                if shift['percentage'] >= 20:  # Adjusted thresholds
+                    st.error("🔴 EXTREME")
+                elif shift['percentage'] >= 12:
+                    st.warning("🟠 HIGH") 
+                else:
+                    st.info("🟡 MODERATE")
+    
+    # NEW: Display broad market trend patterns
+    if has_broad_patterns:
+        st.markdown("### 🌍 Broad Market Trend Patterns")
         
-        with col1:
-            shift_emoji = "📈" if shift['type'] == 'trough' else "📉"
-            st.markdown(f"### {shift_emoji} Market-Wide Seasonal {shift['type'].title()}")
-            st.markdown(f"**Week {shift['week']}** ({shift['weeks_away']} weeks away)")
-            st.markdown(f"Affecting **{shift['group_count']} industries** ({shift['percentage']:.1f}% of market)")
-            st.markdown(f"Covering **{shift['total_stocks']:,} stocks** with avg shift score of **{shift['avg_score']:.1f}**")
+        broad_data = market_analysis['broad_patterns']
+        total_analyzed = broad_data['total_analyzed']
         
-        with col2:
-            st.markdown("**Top Industries:**")
-            for group in shift['groups'][:5]:
-                st.markdown(f"• {group['name'][:25]}...")
+        st.markdown(f"**Widespread patterns affecting large portions of the market:**")
         
-        with col3:
-            st.markdown("**Risk Level:**")
-            if shift['percentage'] >= 30:
-                st.error("🔴 EXTREME")
-            elif shift['percentage'] >= 20:
-                st.warning("🟠 HIGH") 
+        for i, pattern in enumerate(broad_data['patterns'][:5], 1):  # Show top 5 patterns
+            pattern_name = pattern['pattern']
+            count = pattern['count']
+            percentage = pattern['percentage']
+            
+            # Color code by severity
+            if percentage >= 40:
+                alert_level = "🔴 CRITICAL"
+                alert_color = "error"
+            elif percentage >= 30:
+                alert_level = "🟠 MAJOR"
+                alert_color = "warning"
             else:
-                st.info("🟡 MODERATE")
+                alert_level = "🟡 NOTABLE"
+                alert_color = "info"
+            
+            col1, col2, col3 = st.columns([3, 1, 1])
+            
+            with col1:
+                st.markdown(f"**{i}. {pattern_name}**")
+                st.markdown(f"Pattern observed across {count} industries")
+                
+            with col2:
+                st.metric("Market Coverage", f"{percentage:.1f}%")
+                
+            with col3:
+                if alert_color == "error":
+                    st.error(alert_level)
+                elif alert_color == "warning":
+                    st.warning(alert_level)
+                else:
+                    st.info(alert_level)
+        
+        # Interpretation help
+        if broad_data['patterns']:
+            dominant_pattern = broad_data['patterns'][0]
+            st.markdown("### 📊 Pattern Analysis")
+            
+            interpretation = get_pattern_interpretation(dominant_pattern['pattern'], dominant_pattern['percentage'])
+            st.markdown(f"**Market Interpretation:** {interpretation}")
     
     # Market sentiment overview
     if market_analysis['trend_consensus']:
@@ -1261,6 +1386,19 @@ def display_market_wide_alert(market_analysis):
             st.metric("Mixed Signals", consensus['mixed_signals'])
     
     st.markdown("---")
+
+def get_pattern_interpretation(pattern_name, percentage):
+    """Provide interpretation for detected broad market patterns"""
+    interpretations = {
+        'Above Seasonal Norm': f"The market is running significantly hotter than historical seasonal expectations across {percentage:.0f}% of analyzed industries. This could indicate broad-based strength or potential overextension.",
+        'Below Seasonal Norm': f"Market performance is lagging historical seasonal patterns across {percentage:.0f}% of industries. This may signal broader weakness or potential opportunity.",
+        'Accelerating Away': f"Trends are accelerating away from seasonal norms in {percentage:.0f}% of industries, suggesting momentum-driven moves that may be unsustainable.",
+        'Correcting Toward': f"Industries are correcting back toward seasonal norms in {percentage:.0f}% of cases, indicating mean reversion forces at work.",
+        '8 Week Stronger': f"Medium-term (8-week) trends are outpacing seasonal expectations in {percentage:.0f}% of industries, suggesting sustained momentum.",
+        '4 Week Stronger': f"Short-term (4-week) trends are stronger than seasonal patterns in {percentage:.0f}% of industries, indicating recent acceleration."
+    }
+    
+    return interpretations.get(pattern_name, f"Widespread {pattern_name.lower()} pattern detected across {percentage:.0f}% of analyzed industries.")
 
 def display_trend_shift_tabs(trend_shifts, market_analysis):
     """Display the tabbed results interface"""
@@ -1324,16 +1462,23 @@ def display_summary_statistics(groups_scanned, trend_shifts, market_analysis):
     """Display the scanner summary statistics"""
     st.markdown("### Scanner Summary")
     
-    # Add download button at the top
-    if trend_shifts:
+    # Add current week context at the top
+    current_week = get_current_week()
+    current_date = datetime.now().strftime("%B %d, %Y")
+    st.info(f"📅 **Current Position:** Week {current_week} of 2025 ({current_date})")
+    
+    # Add download button prominently at the top
+    if trend_shifts and len(trend_shifts) > 0:
         download_data = create_download_data(trend_shifts, market_analysis, groups_scanned)
         st.download_button(
-            label="📥 Download Scan Results (CSV)",
+            label="📥 Download Complete Results (CSV)",
             data=download_data,
-            file_name=f"trend_shift_scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            file_name=f"trend_shift_scan_week{current_week}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
             mime="text/csv",
-            help="Download complete scan results as CSV file"
+            help="Download all scan results including market analysis",
+            key="download_results"
         )
+        st.markdown("---")  # Add separator
     
     col1, col2, col3, col4, col5 = st.columns(5)
     
